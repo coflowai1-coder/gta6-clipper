@@ -870,13 +870,17 @@ def cmd_post_buffer(cfg, con):
                         (str(newp), slot.isoformat(), r["id"]))
             con.commit()
             topic = p.get("ntfy_topic")
-            if camp and topic:
+            if topic:
+                if camp:
+                    msg = f"{m['streamer']} clip is LIVE on {', '.join(ok)}. Submit the links in Content Rewards now (30-min rule)!"
+                    hdr = {"Title": f"💰 Submit {camp} clip now", "Tags": "moneybag", "Priority": "high",
+                           "Click": "https://contentrewards.com"}
+                else:
+                    msg = f"{m['streamer']} ({r['views']:,} Twitch views) just posted on {', '.join(ok)}: {m['caption'][:80]}"
+                    hdr = {"Title": "✅ New clip posted", "Tags": "movie_camera", "Priority": "default"}
+                hdr["At"] = str(int(slot.timestamp()) + 60)
                 try:
-                    requests.post(f"https://ntfy.sh/{topic}", timeout=20,
-                                  data=f"{m['streamer']} clip is LIVE on {', '.join(ok)}. Submit the links in Content Rewards now (30-min rule)!".encode(),
-                                  headers={"Title": f"Submit {camp} clip now", "Tags": "moneybag",
-                                           "Priority": "high", "At": str(int(slot.timestamp()) + 60),
-                                           "Click": "https://contentrewards.com"})
+                    requests.post(f"https://ntfy.sh/{topic}", timeout=20, data=msg.encode(), headers=hdr)
                 except Exception as e:
                     log(f"   (alert not sent: {e})")
             lane = "⚡ FAST LANE " if hm == "fast" else "📅 "
