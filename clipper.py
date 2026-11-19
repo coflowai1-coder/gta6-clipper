@@ -753,6 +753,30 @@ def cmd_post_buffer(cfg, con):
                 yield t, hm
 
     slots = sorted(free_slots())
+    cap = p.get("daily_cap", 14)
+    fast_views = p.get("fast_lane_views", 10000)
+    start_h, end_h = p.get("active_hours", [9, 27])
+    ig_hours = set(p.get("instagram_hours", [12, 13, 19, 20, 21, 22, 23, 0]))
+    per_day = {}
+    for (sa,) in con.execute("SELECT scheduled_at FROM clips WHERE scheduled_at IS NOT NULL"):
+        d_ = dt.datetime.fromisoformat(sa).astimezone()
+        d_ = (d_ - dt.timedelta(hours=6)).date()  # "posting day" runs 6 AM → 6 AM
+        per_day[d_] = per_day.get(d_, 0) + 1
+
+    def pday(t):
+        return (t.astimezone() - dt.timedelta(hours=6)).date()
+
+    def in_window(t):
+        h = t.astimezone().hour
+        return start_h <= h < end_h if end_h <= 24 else (h >= start_h or h < end_h - 24)
+
+    def fast_slot():
+        t = now + dt.timedelta(minutes=10)
+        for _ in range(30):
+            if not any(abs((t - u).total_seconds()) < 20 * 60 for u in used):
+                return t if in_window(t) else None
+            t += dt.timedelta(minutes=5)
+        return None
     if os.getenv("POST_NOW", "").lower() in ("1", "true"):  # test mode: post in ~10 min, all platforms
         slots = [(now + dt.timedelta(minutes=10 + 15 * i), "now") for i in range(len(rows))]
         ig_slots = set()
@@ -767,13 +791,23 @@ def cmd_post_buffer(cfg, con):
         social = f"{m['caption']}\n\n🎥 {m['streamer']} (twitch.tv/{m['login']})\n{' '.join(m['hashtags'])}"
         try:
             video_url = sb_upload(Path(r["video"]))
-            if not slots:
+            hm = None
+            slot = fast_slot() if r["views"] >= fast_views else None
+            if slot:
+                hm = "fast"
+                slots = [x for x in slots if abs((x[0] - slot).total_seconds()) >= 20 * 60]
+            elif slots:
+                slot, hm = slots.pop(0)
+            else:
                 log("No free posting slot in the next few hours — waiting for the next peak window.")
                 break
-            slot, hm = slots.pop(0)
+            if per_day.get(pday(slot), 0) >= cap:
+                log(f"Daily cap of {cap} reached — skipping {r['streamer']}")
+                continue
             ok = []
             for c in chans:
-                if c["service"] == "instagram" and ig_slots and hm not in ig_slots:
+                if c["service"] == "instagram" and ig_slots and (
+                        (hm == "fast" and slot.astimezone().hour not in ig_hours) or (hm not in ("fast",) and hm not in ig_slots)):
                     continue
                 meta = {}
                 if c["service"] == "instagram":
@@ -797,8 +831,10 @@ def cmd_post_buffer(cfg, con):
             con.execute("UPDATE clips SET status='scheduled', video=?, scheduled_at=? WHERE id=?",
                         (str(newp), slot.isoformat(), r["id"]))
             con.commit()
-            log(f"📅 {m['streamer']}: '{m['caption']}' → {', '.join(ok)} at {slot.astimezone():%a %I:%M %p}")
+            lane = "⚡ FAST LANE " if hm == "fast" else "📅 "
+            log(f"{lane}{m['streamer']} ({r['views']:,} views): '{m['caption']}' → {', '.join(ok)} at {slot.astimezone():%a %I:%M %p}")
             used.append(slot)
+            per_day[pday(slot)] = per_day.get(pday(slot), 0) + 1
         except Exception as e:
             log(f"❌ post failed for {r['id']}: {e}")
 

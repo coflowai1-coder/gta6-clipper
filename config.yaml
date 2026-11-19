@@ -58,7 +58,10 @@ posting:
   slots_weekend: ["09:00", "10:30", "12:00", "13:00", "14:30", "15:30", "16:30",
                   "17:30", "18:30", "19:30", "20:30", "21:30", "22:30", "00:00"]
   instagram_slots: ["12:00", "13:00", "19:30", "20:15", "20:30", "21:00", "22:30", "00:00", "00:30"]
-  horizon_hours: 6          # only fill slots in the next 6 h, so every clip is fresh
+  horizon_hours: 3          # normal clips: only fill peak slots in the next 3 h (fresh only)
+  fast_lane_views: 10000    # 10k+ view clips skip the slot schedule and post ~10 min after being found
+  daily_cap: 14             # max posts per day (TikTok allows ~15)
+  active_hours: [9, 27]     # posting window 9 AM – 3 AM Toronto
   hashtags: ["#gta6", "#gtavi", "#gta", "#twitch", "#fyp"]
 
 work_dir: work

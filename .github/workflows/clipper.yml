@@ -2,8 +2,8 @@ name: GTA 6 clipper
 
 on:
   schedule:
-    # every hour, 24/7 (posts still only go out 9 AM – 3 AM Toronto)
-    - cron: "7 * * * *"
+    # every 20 minutes, 24/7 (posts only go out 9 AM – 3 AM Toronto)
+    - cron: "7,27,47 * * * *"
   workflow_dispatch:
     inputs:
       post_now:
@@ -68,7 +68,7 @@ jobs:
 
       - name: Find, edit and schedule clips
         if: ${{ !inputs.audit_only }}
-        run: python clipper.py run --max ${{ inputs.post_now && 3 || 2 }} --hours ${{ inputs.post_now && 24 || 6 }} --autopost
+        run: python clipper.py run --max ${{ inputs.post_now && 3 || 2 }} --hours ${{ inputs.post_now && 24 || 4 }} --autopost
 
       - name: Save progress
         if: always()
