@@ -464,14 +464,14 @@ def render(src: Path, out: Path, ass: Path, layout: dict, start: float, length: 
     mode = layout.get("mode", "blur")
     if mode == "bubble":
         cam = layout.get("_cam")
-        game = "[g]crop=ih*9/16:ih,scale=1080:1920,setsar=1[game]"
+        game = "[g]crop=ih*9/16:ih,scale=1080:1920:flags=lanczos,unsharp=5:5:0.7:5:5:0.0,setsar=1[game]"
         if cam:
             x, y, w, h = cam
             bw, bh = layout.get("bubble_w", 460), int(layout.get("bubble_w", 460) * 0.8)
             fc = (
                 f"[0:v]split=2[g][c];{game};"
                 f"[c]crop=iw*{w:.4f}:ih*{h:.4f}:iw*{x:.4f}:ih*{y:.4f},"
-                f"scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
+                f"scale={bw}:{bh}:force_original_aspect_ratio=increase:flags=lanczos,crop={bw}:{bh},"
                 "pad=iw+12:ih+12:6:6:white[cam];"
                 f"[game][cam]overlay=40:{layout.get('bubble_y', 170)},"
                 f"ass=filename={ass_f}[v]"
@@ -521,8 +521,8 @@ def render(src: Path, out: Path, ass: Path, layout: dict, start: float, length: 
         FFMPEG, "-y", "-loglevel", "error", "-ss", f"{start:.2f}", "-i", str(src), "-t", f"{length:.2f}",
         "-filter_complex", fc, "-map", "[v]", "-map", "0:a?",
         "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-maxrate", "2M", "-bufsize", "4M", "-r", "30", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", str(out.resolve()),
+        "-c:v", "libx264", "-preset", "medium", "-profile:v", "high", "-crf", "18", "-maxrate", "3.5M", "-bufsize", "7M", "-r", "30", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", str(out.resolve()),
     ]
     cmd[cmd.index("-i") + 1] = str(src.resolve())
     try:
