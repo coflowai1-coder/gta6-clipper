@@ -1,0 +1,53 @@
+# ── What to clip ──────────────────────────────────────────────
+# Exact Twitch category name. Run `python clipper.py check` to confirm it resolves.
+game_name: "Grand Theft Auto VI"
+
+# ONLY streamers you have permission to clip (a paid Content Rewards / Clipping
+# campaign, or a streamer who openly allows clippers). Use `discover` to find who's hot.
+streamers: auto            # auto = clip the biggest GTA 6 streamers right now
+auto:
+  top_n: 8                  # how many top streamers to follow
+  language: en              # English streams only (best for a Canadian/US audience)
+
+fetch:
+  lookback_hours: 12        # only clips made in the last X hours (fresh = algorithm boost)
+  min_views: 1000            # Twitch clip views = proof the moment is good
+  min_seconds: 12           # skip tiny clips
+  max_new_per_run: 6
+  max_per_streamer: 99      # no limit — most viral wins
+
+max_seconds: 30             # sweet spot for Shorts/Reels/TikTok clips
+whisper_model: small        # tiny | base | small | medium  (small = good on a MacBook)
+llm_model: claude-haiku-5-5 # used only if ANTHROPIC_API_KEY is set
+
+# ── Look ──────────────────────────────────────────────────────
+layout:
+  mode: blur                # blur = gameplay centred on blurred background | stack = facecam on top
+  game_aspect: 1.25         # how tightly to crop gameplay (lower = more zoom)
+  lift: 60                  # push gameplay up a bit so captions sit below it
+
+style:
+  font: "Arial Black"
+  caption_size: 86
+  words_per_line: 3
+  highlight_color: "&H0000F2FF"   # yellow (ASS colour format &HAABBGGRR)
+  caption_y: 0.72                 # 0 = top, 1 = bottom
+  hook_size: 64
+  hook_margin: 170
+  show_hook: false                # no text box at the top
+  hook_seconds: 0                 # 0 = keep hook on screen for the whole clip
+  trim_start: true                # cut dead air before the first word
+  credit_template: "{streamer} • twitch.tv/{login}"
+
+# ── Posting ───────────────────────────────────────────────────
+posting:
+  auto_post: false          # false = clips wait in work/review for `approve` (recommended)
+  backend: buffer           # buffer (free) or uploadpost
+  platforms: [tiktok, instagram, youtube]
+  spacing_minutes: 40       # gap between posts so you don't look like a spam bot
+  daily_cap: 14             # launch week: up to 14/day. Lower to 10 after launch week
+  active_hours: [9, 24]     # only post 9 AM – midnight (better reach than 3 AM)
+  instagram_every: 2        # IG gets every 2nd clip (IG punishes volume hardest)
+  hashtags: ["#gta6", "#gtavi", "#gta", "#twitch", "#fyp"]
+
+work_dir: work
