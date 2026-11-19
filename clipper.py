@@ -71,6 +71,7 @@ def load_config() -> dict:
         if k in os.environ:
             os.environ[k] = os.environ[k].strip()
     cfg.setdefault("work_dir", "work")
+    CAMPAIGNS.update({k.lower(): v for k, v in (cfg.get("campaigns") or {}).items()})
     # cloud overrides (set in the GitHub workflow)
     if os.getenv("WHISPER_MODEL"):
         cfg["whisper_model"] = os.getenv("WHISPER_MODEL")
@@ -81,6 +82,9 @@ def load_config() -> dict:
     for sub in ("raw", "review", "approved", "posted", "rejected"):
         (ROOT / cfg["work_dir"] / sub).mkdir(parents=True, exist_ok=True)
     return cfg
+
+
+CAMPAIGNS = {}  # twitch login -> required hashtag (filled from config.yaml "campaigns")
 
 
 def log(msg: str) -> None:
@@ -535,13 +539,16 @@ def cmd_run_once(cfg, con):
             if is_inappropriate(c["title"]):
                 continue
             c["_score"] = views_per_hour(c)
+            if c["broadcaster_name"].lower() in CAMPAIGNS:
+                c["_score"] *= cfg.get("campaign_boost", 4)  # paid campaigns first
             c["_login"] = c["broadcaster_name"].lower()
             candidates.append(c)
 
     # tiered quality bar: if any clip clears the premium bar, only use those
     premium = f.get("premium_views", 0)
     if premium and any(c["view_count"] >= premium for c in candidates):
-        candidates = [c for c in candidates if c["view_count"] >= premium]
+        candidates = [c for c in candidates if c["view_count"] >= premium
+                      or c["broadcaster_name"].lower() in CAMPAIGNS]
         log(f"premium mode: {len(candidates)} clips with {premium:,}+ views")
     # dedupe overlapping clips of the same moment (same VOD, offsets within 45s)
     candidates.sort(key=lambda c: -c["_score"])
@@ -788,7 +795,10 @@ def cmd_post_buffer(cfg, con):
             log(f"skipped {r['streamer']}: video from an earlier run is gone (cloud runs start fresh)")
             continue
         m = json.loads(r["meta"])
-        social = f"{m['caption']}\n\n🎥 {m['streamer']} (twitch.tv/{m['login']})\n{' '.join(m['hashtags'])}"
+        camp = CAMPAIGNS.get(m["login"].lower())
+        tags = ([camp] if camp else []) + [t for t in m["hashtags"] if t.lower() != (camp or "").lower()]
+        capt = m["caption"] if m["streamer"].lower() in m["caption"].lower() else f"{m['streamer']}: {m['caption']}"
+        social = f"{capt}\n\n🎥 {m['streamer']} (twitch.tv/{m['login']})\n{' '.join(tags)}"
         try:
             video_url = sb_upload(Path(r["video"]))
             hm = None
@@ -831,6 +841,16 @@ def cmd_post_buffer(cfg, con):
             con.execute("UPDATE clips SET status='scheduled', video=?, scheduled_at=? WHERE id=?",
                         (str(newp), slot.isoformat(), r["id"]))
             con.commit()
+            topic = p.get("ntfy_topic")
+            if camp and topic:
+                try:
+                    requests.post(f"https://ntfy.sh/{topic}", timeout=20,
+                                  data=f"{m['streamer']} clip is LIVE on {', '.join(ok)}. Submit the links in Content Rewards now (30-min rule)!".encode(),
+                                  headers={"Title": f"Submit {camp} clip now", "Tags": "moneybag",
+                                           "Priority": "high", "At": str(int(slot.timestamp()) + 60),
+                                           "Click": "https://contentrewards.com"})
+                except Exception as e:
+                    log(f"   (alert not sent: {e})")
             lane = "⚡ FAST LANE " if hm == "fast" else "📅 "
             log(f"{lane}{m['streamer']} ({r['views']:,} views): '{m['caption']}' → {', '.join(ok)} at {slot.astimezone():%a %I:%M %p}")
             used.append(slot)
