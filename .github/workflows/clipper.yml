@@ -120,6 +120,7 @@ jobs:
           for f in work/review/*.mp4; do
             n=$(basename "$f" .mp4)
             ffmpeg -v error -y -i "$f" -vf "fps=1/6,scale=270:-2,tile=4x1" -frames:v 1 "preview/$n.jpg"
+            cp "$f" "preview/$n.mp4"
           done
           git config user.name "clipper-bot"; git config user.email "clipper-bot@users.noreply.github.com"
           git checkout -q -B previews && git add preview && git commit -qm "preview stills" && git push -q -f origin previews || true
