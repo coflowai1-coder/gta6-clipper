@@ -14,6 +14,10 @@ on:
         description: "Send this message to Jacob's phone"
         type: string
         default: ""
+      cancel_name:
+        description: "Cancel queued posts whose video name contains this"
+        type: string
+        default: ""
       yt_url:
         description: "Clip a YouTube video/VOD (most-replayed moments) and post"
         type: string
@@ -102,6 +106,12 @@ jobs:
       - name: Safety audit of queued posts
         if: ${{ inputs.audit_only }}
         run: python clipper.py audit
+
+      - name: Cancel queued posts
+        if: ${{ inputs.cancel_name != '' }}
+        env:
+          CN: ${{ inputs.cancel_name }}
+        run: python clipper.py cancel "$CN"
 
       - name: Clip YouTube video
         if: ${{ inputs.yt_url != '' }}

@@ -894,6 +894,23 @@ def cmd_audit(cfg, con):
             log(f"   ok: {name}")
 
 
+def cmd_cancel(cfg, con, name):
+    """Delete queued Buffer posts whose video file name contains `name`."""
+    orgs = buffer_q("query { account { organizations { id } } }")["account"]["organizations"]
+    n = 0
+    for o in orgs:
+        q = ('query { posts(first: 100, input: {organizationId: "%s", filter: {status: [scheduled]}}) '
+             '{ edges { node { id dueAt assets { source } } } } }') % o["id"]
+        for e in buffer_q(q)["posts"]["edges"]:
+            p_ = e["node"]
+            if any(name in (a_.get("source") or "") for a_ in p_.get("assets") or []):
+                buffer_q("mutation($i: DeletePostInput!) { deletePost(input: $i) { __typename } }", {"i": {"id": p_["id"]}})
+                n += 1
+    con.execute("UPDATE clips SET status='removed', error='cancelled (old layout)' WHERE video LIKE ? AND status='scheduled'", (f"%{name}%",))
+    con.commit()
+    log(f"🗑️  cancelled {n} queued post(s) matching {name}")
+
+
 def cmd_post_buffer(cfg, con):
     if not os.getenv("BUFFER_API_KEY") or not os.getenv("SUPABASE_URL"):
         log("BUFFER_API_KEY / SUPABASE_URL missing in .env — skipping posting")
@@ -1162,6 +1179,7 @@ def main():
     r.add_argument("--autopost", action="store_true", help="approve + schedule clips that pass the safety filter")
     r.add_argument("--preview", action="store_true", help="render clips only, never post")
     sub.add_parser("approve"); sub.add_parser("post"); sub.add_parser("stats"); sub.add_parser("audit")
+    x = sub.add_parser("cancel"); x.add_argument("name")
     y = sub.add_parser("ytvod"); y.add_argument("url"); y.add_argument("--n", type=int, default=4)
     y.add_argument("--views", type=int, default=50000, help="priority (>=10k = fast lane)")
     y.add_argument("--autopost", action="store_true")
@@ -1187,6 +1205,8 @@ def main():
                 break
             log(f"sleeping {args.loop} min…")
             time.sleep(args.loop * 60)
+    elif args.cmd == "cancel":
+        cmd_cancel(cfg, con, args.name)
     elif args.cmd == "ytvod":
         if args.autopost:
             cfg["posting"]["auto_post"] = True
