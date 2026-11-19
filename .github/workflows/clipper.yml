@@ -2,9 +2,8 @@ name: GTA 6 clipper
 
 on:
   schedule:
-    # every hour, 9 AM – 3 AM Toronto time (covers California until midnight)
-    - cron: "7 14-23 * * *"
-    - cron: "7 0-7 * * *"
+    # every hour, 24/7 (posts still only go out 9 AM – 3 AM Toronto)
+    - cron: "7 * * * *"
   workflow_dispatch: {}
 
 permissions:

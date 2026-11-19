@@ -375,7 +375,7 @@ def render(src: Path, out: Path, ass: Path, layout: dict, start: float, length: 
         FFMPEG, "-y", "-loglevel", "error", "-ss", f"{start:.2f}", "-i", str(src), "-t", f"{length:.2f}",
         "-filter_complex", fc, "-map", "[v]", "-map", "0:a?",
         "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-r", "30", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-maxrate", "2M", "-bufsize", "4M", "-r", "30", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", str(out.resolve()),
     ]
     cmd[cmd.index("-i") + 1] = str(src.resolve())
