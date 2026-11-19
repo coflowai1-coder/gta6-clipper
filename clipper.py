@@ -120,6 +120,10 @@ def db(cfg) -> sqlite3.Connection:
             created_at TEXT, status TEXT, video TEXT, meta TEXT,
             scheduled_at TEXT, posted_at TEXT, error TEXT)"""
     )
+    try:
+        con.execute("ALTER TABLE clips ADD COLUMN platforms TEXT")
+    except sqlite3.OperationalError:
+        pass
     return con
 
 
@@ -843,7 +847,13 @@ def cmd_post_buffer(cfg, con):
                 log(f"Daily cap of {cap} reached — skipping {r['streamer']}")
                 continue
             ok = []
+            yt_limit = p.get("youtube_daily", 2)
+            yt_today = sum(1 for (sa, pl) in con.execute(
+                "SELECT scheduled_at, platforms FROM clips WHERE platforms LIKE '%youtube%'")
+                if pday(dt.datetime.fromisoformat(sa)) == pday(slot))
             for c in chans:
+                if c["service"] == "youtube" and yt_today >= yt_limit:
+                    continue  # YouTube only allows a few posts/day on this channel — save them for the best clips
                 if c["service"] == "instagram" and ig_slots and (
                         (hm == "fast" and slot.astimezone().hour not in ig_hours) or (hm not in ("fast",) and hm not in ig_slots)):
                     continue
@@ -868,8 +878,8 @@ def cmd_post_buffer(cfg, con):
                 raise RuntimeError("no channel accepted the post")
             newp = wd / "posted" / Path(r["video"]).name
             shutil.move(r["video"], newp)
-            con.execute("UPDATE clips SET status='scheduled', video=?, scheduled_at=? WHERE id=?",
-                        (str(newp), slot.isoformat(), r["id"]))
+            con.execute("UPDATE clips SET status='scheduled', video=?, scheduled_at=?, platforms=? WHERE id=?",
+                        (str(newp), slot.isoformat(), ",".join(ok), r["id"]))
             con.commit()
             topic = p.get("ntfy_topic")
             if topic:
@@ -931,8 +941,8 @@ def cmd_post(cfg, con):
                 raise RuntimeError(f"{resp.status_code}: {resp.text[:300]}")
             newp = wd / "posted" / Path(r["video"]).name
             shutil.move(r["video"], newp)
-            con.execute("UPDATE clips SET status='scheduled', video=?, scheduled_at=? WHERE id=?",
-                        (str(newp), slot.isoformat(), r["id"]))
+            con.execute("UPDATE clips SET status='scheduled', video=?, scheduled_at=?, platforms=? WHERE id=?",
+                        (str(newp), slot.isoformat(), ",".join(ok), r["id"]))
             con.commit()
             log(f"📅 scheduled {m['streamer']} '{m['hook']}' for {slot.astimezone():%a %H:%M}")
             slot += spacing

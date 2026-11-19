@@ -61,6 +61,7 @@ posting:
   ntfy_topic: gta6clips-2ed001cf89   # phone alert when a campaign clip goes live (ntfy app)
   horizon_hours: 3          # normal clips: only fill peak slots in the next 3 h (fresh only)
   fast_lane_views: 10000    # 10k+ view clips skip the slot schedule and post ~10 min after being found
+  youtube_daily: 2          # YouTube limits this channel to 2 posts/day (raise after verifying the channel)
   daily_cap: 14             # max posts per day (TikTok allows ~15)
   active_hours: [9, 27]     # posting window 9 AM – 3 AM Toronto
   hashtags: ["#gta6", "#gtavi", "#gta", "#twitch", "#fyp"]
