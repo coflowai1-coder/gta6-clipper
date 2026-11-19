@@ -1448,6 +1448,7 @@ def main():
     r.add_argument("--any", action="store_true", help="test: use top clips from any streamer")
     r.add_argument("--autopost", action="store_true", help="approve + schedule clips that pass the safety filter")
     r.add_argument("--preview", action="store_true", help="render clips only, never post")
+    sub.add_parser("sendinbox")
     sub.add_parser("approve"); sub.add_parser("post"); sub.add_parser("stats"); sub.add_parser("audit")
     x = sub.add_parser("cancel"); x.add_argument("name")
     hh = sub.add_parser("hot"); hh.add_argument("--hours", type=int, default=6)
@@ -1486,6 +1487,9 @@ def main():
         if args.autopost or args.inbox:
             cfg["posting"]["auto_post"] = True
         cmd_ytvod(cfg, con, args)
+    elif args.cmd == "sendinbox":
+        for (cid,) in con.execute("SELECT id FROM clips WHERE status='approved' AND id LIKE 'yt_%'").fetchall():
+            send_to_inbox(con, cid)
     elif args.cmd == "discover":
         cmd_discover(cfg, args)
     else:
