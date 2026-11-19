@@ -65,7 +65,7 @@ posting:
   fast_lane_views: 0        # every clip posts as soon as it is ready (~10 min)
   youtube_daily: 10         # channel verified 2026-11-19 — limit raised (Buffer/YouTube may still cap it)
   instagram_hours: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
-  filler_daily: 4           # max smaller (3k–10k) clips per day; the rest of the day is 10k+ / campaign clips
+  filler_daily: 0           # no small filler clips — only 10k+ viral clips (and paid campaign clips)
   filler_gap_minutes: 90    # a smaller clip only posts if nothing posted in the last 90 min
   daily_cap: 14             # max posts per day (TikTok allows ~15)
   active_hours: [0, 24]     # any time of day
