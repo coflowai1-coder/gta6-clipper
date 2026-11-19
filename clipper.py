@@ -101,7 +101,7 @@ def alert(title: str, msg: str, key: str = "") -> None:
         topic = (yaml.safe_load(cfgp.read_text()).get("posting") or {}).get("ntfy_topic")
         if topic:
             requests.post(f"https://ntfy.sh/{topic}", data=msg.encode(), timeout=20,
-                          headers={"Title": title, "Tags": "warning", "Priority": "high"})
+                          headers={"Title": title.encode("ascii", "ignore").decode().strip(), "Tags": "warning", "Priority": "high"})
     except Exception:
         pass
 
@@ -860,7 +860,8 @@ def cmd_post_buffer(cfg, con):
                 res = buffer_q(CREATE_POST, {"input": inp})["createPost"]
                 if res.get("message"):
                     log(f"   ⚠️ {c['service']}: {res['message']}")
-                    alert(f"⚠️ {c['service'].title()} post rejected", f"Buffer refused a post to {c['service']}: {res['message'][:200]}. Claude will look at it on the next check-in.", key=c["service"])
+                    if "maximum number of posts" not in res["message"]:
+                        alert(f"⚠️ {c['service'].title()} post rejected", f"Buffer refused a post to {c['service']}: {res['message'][:200]}. Claude will look at it on the next check-in.", key=c["service"])
                 else:
                     ok.append(c["service"])
             if not ok:
@@ -880,6 +881,7 @@ def cmd_post_buffer(cfg, con):
                     msg = f"{m['streamer']} ({r['views']:,} Twitch views) just posted on {', '.join(ok)}: {m['caption'][:80]}"
                     hdr = {"Title": "✅ New clip posted", "Tags": "movie_camera", "Priority": "default"}
                 hdr["At"] = str(int(slot.timestamp()) + 60)
+                hdr["Title"] = hdr["Title"].encode("ascii", "ignore").decode().strip()
                 try:
                     requests.post(f"https://ntfy.sh/{topic}", timeout=20, data=msg.encode(), headers=hdr)
                 except Exception as e:
