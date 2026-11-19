@@ -1,9 +1,10 @@
 name: GTA 6 clipper
 
 on:
-  schedule:
+  # schedule:
     # every hour, 24/7 (posts still only go out 9 AM – 3 AM Toronto)
-    - cron: "7 * * * *"
+    # PAUSED — uncomment to resume
+    # - cron: "7 * * * *"
   workflow_dispatch:
     inputs:
       post_now:
