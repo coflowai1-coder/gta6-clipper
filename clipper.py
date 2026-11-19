@@ -590,9 +590,13 @@ def cmd_run_once(cfg, con):
             varied.append(c)
     picked = varied
     backlog = con.execute("SELECT COUNT(*) n FROM clips WHERE status='approved'").fetchone()["n"]
-    if cfg["posting"].get("auto_post") and backlog >= 10:
+    queued = con.execute("SELECT COUNT(*) n FROM clips WHERE status='scheduled' AND scheduled_at > ?",
+                         (dt.datetime.now(UTC).isoformat(),)).fetchone()["n"]
+    if cfg["posting"].get("auto_post") and (backlog >= 10 or queued >= 9):
         picked = []
-        log(f"{backlog} clips already waiting to post — not rendering more this round")
+        log(f"Buffer queue full ({queued} waiting) — not rendering more this round")
+    elif cfg["posting"].get("auto_post"):
+        picked = picked[: max(1, 9 - queued)]  # never render more than we can post
     picked = picked[: f.get("max_new_per_run", 6)]
     log(f"{len(candidates)} candidate clips, {len(picked)} new to render")
     for c in picked:
