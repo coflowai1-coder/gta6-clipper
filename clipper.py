@@ -576,7 +576,8 @@ def cmd_run_once(cfg, con):
         key = (c.get("video_id") or c["broadcaster_id"], c.get("vod_offset") or 0)
         if any(k[0] == key[0] and key[1] and abs(k[1] - key[1]) < 45 for k in seen_moments):
             continue
-        if con.execute("SELECT 1 FROM clips WHERE id=?", (c["id"],)).fetchone():
+        if con.execute("SELECT 1 FROM clips WHERE id=? AND NOT (status='error' AND error='video file missing')",
+                       (c["id"],)).fetchone():
             continue
         seen_moments.append(key)
         picked.append(c)
@@ -600,7 +601,7 @@ def cmd_run_once(cfg, con):
     picked = picked[: f.get("max_new_per_run", 6)]
     log(f"{len(candidates)} candidate clips, {len(picked)} new to render")
     for c in picked:
-        con.execute("INSERT INTO clips(id,streamer,title,url,views,created_at,status) VALUES(?,?,?,?,?,?,?)",
+        con.execute("INSERT OR REPLACE INTO clips(id,streamer,title,url,views,created_at,status) VALUES(?,?,?,?,?,?,?)",
                     (c["id"], c["broadcaster_name"], c["title"], c["url"], c["view_count"], c["created_at"], "new"))
         con.commit()
         process_clip(cfg, con, c, streamers[c["_login"]])
