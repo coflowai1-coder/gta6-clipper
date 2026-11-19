@@ -676,7 +676,7 @@ def cmd_run_once(cfg, con):
         key = (c.get("video_id") or c["broadcaster_id"], c.get("vod_offset") or 0)
         if any(k[0] == key[0] and key[1] and abs(k[1] - key[1]) < 45 for k in seen_moments):
             continue
-        if con.execute("SELECT 1 FROM clips WHERE id=? AND NOT (status='error' AND error='video file missing')",
+        if con.execute("SELECT 1 FROM clips WHERE id=? AND NOT ((status='error' AND error='video file missing') OR (status='removed' AND error='cancelled (old layout)'))",
                        (c["id"],)).fetchone():
             continue
         seen_moments.append(key)
