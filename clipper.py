@@ -180,7 +180,8 @@ class Twitch:
 
 BLOCK = re.compile(
     r"strip ?club|stripper|strip ?tease|lap ?dance|private dance|pole ?danc|horny|\bsex|nsfw|nude|naked|porn|onlyfans|"
-    r"boob|tits|titty|booty|\bthicc?\b|gyat|\bcheeks\b|bikini|lingerie|\bfreaky\b|"
+    r"boob|tits|titty|booty|\bbutt\b|butt ?plug|\bplug\b|panties|undies|thong|dildo|vibrator|condom|bend over|"
+    r"\bthicc?\b|gyat|\bcheeks\b|bikini|lingerie|\bfreaky\b|\bsexy\b|\bstrip\b|"
     r"twerk|hooker|prostitut|brothel|escort|\brape|thirst|\bnut\b|gooning|\bhot ?tub|"
     r"n[i1]gg|f[a@]gg?[o0]?t|\bretard|tranny|\bkys\b|kill yourself", re.I)
 SWEARS = re.compile(r"\b(f+u+c+k\w*|sh[i1]t\w*|b[i1]tch\w*|ass(hole)?|dick\w*|pussy|c+u+n+t\w*|damn)\b", re.I)
@@ -218,9 +219,9 @@ def nsfw_check(video: Path, start: float = 0, length: float = 600) -> str:
             for d in _nude.detect(str(f)):
                 if d["class"] in NSFW_HARD and d["score"] >= 0.35:
                     return f"nudity ({d['class'].lower()})"
-                if d["class"] in NSFW_SOFT and d["score"] >= 0.55:
+                if d["class"] in NSFW_SOFT and d["score"] >= 0.40:
                     soft_hits += 1
-        if soft_hits >= 3:
+        if soft_hits >= 2:
             return f"sexual/suggestive visuals ({soft_hits} frames)"
     return ""
 
