@@ -538,6 +538,11 @@ def cmd_run_once(cfg, con):
             c["_login"] = c["broadcaster_name"].lower()
             candidates.append(c)
 
+    # tiered quality bar: if any clip clears the premium bar, only use those
+    premium = f.get("premium_views", 0)
+    if premium and any(c["view_count"] >= premium for c in candidates):
+        candidates = [c for c in candidates if c["view_count"] >= premium]
+        log(f"premium mode: {len(candidates)} clips with {premium:,}+ views")
     # dedupe overlapping clips of the same moment (same VOD, offsets within 45s)
     candidates.sort(key=lambda c: -c["_score"])
     picked, seen_moments = [], []

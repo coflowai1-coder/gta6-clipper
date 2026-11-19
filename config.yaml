@@ -17,7 +17,8 @@ auto:
 
 fetch:
   lookback_hours: 12        # only clips made in the last X hours (fresh = algorithm boost)
-  min_views: 3000            # only clips already blowing up on Twitch
+  min_views: 3000            # fallback bar when nothing hits premium
+  premium_views: 10000       # clips with 10k+ Twitch views always win
   min_seconds: 12           # skip tiny clips
   max_new_per_run: 6
   max_per_streamer: 99      # no limit — most viral wins
