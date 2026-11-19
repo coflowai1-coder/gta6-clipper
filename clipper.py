@@ -900,10 +900,11 @@ def pull_inbox(cfg, con) -> None:
     if not url or not key:
         return
     h = {"Authorization": f"Bearer {key}", "apikey": key}
-    r = requests.post(f"{url}/storage/v1/object/list/gta-clips", json={"prefix": "inbox_", "limit": 100}, headers=h, timeout=60)
+    r = requests.post(f"{url}/storage/v1/object/list/gta-clips", json={"prefix": "", "search": "inbox_", "limit": 200}, headers=h, timeout=60)
     if r.status_code >= 300:
+        log(f"inbox check failed: {r.status_code} {r.text[:200]}")
         return
-    names = [o["name"] for o in r.json()]
+    names = [o["name"] for o in r.json() if o["name"].startswith("inbox_")]
     wd = ROOT / cfg["work_dir"]
     done = []
     for n in names:
