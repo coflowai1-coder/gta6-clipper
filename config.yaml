@@ -16,7 +16,7 @@ fetch:
   max_new_per_run: 6
   max_per_streamer: 99      # no limit — most viral wins
 
-max_seconds: 30             # sweet spot for Shorts/Reels/TikTok clips
+max_seconds: 25             # shorter = higher completion rate (~70% needed to go viral)
 whisper_model: small        # tiny | base | small | medium  (small = good on a MacBook)
 llm_model: claude-haiku-5-5 # used only if ANTHROPIC_API_KEY is set
 
@@ -44,10 +44,14 @@ posting:
   auto_post: false          # false = clips wait in work/review for `approve` (recommended)
   backend: buffer           # buffer (free) or uploadpost
   platforms: [tiktok, instagram, youtube]
-  spacing_minutes: 40       # gap between posts so you don't look like a spam bot
-  daily_cap: 14             # launch week: up to 14/day. Lower to 10 after launch week
-  active_hours: [9, 27]     # post 9 AM – 3 AM Toronto (= 6 AM – midnight California)
-  instagram_every: 2        # IG gets every 2nd clip (IG punishes volume hardest)
+  # Posting slots (Toronto time) — weighted to 2026 peak-engagement windows:
+  # lunch scroll, after-school/after-work, prime-time evening, West-Coast evening.
+  slots_weekday: ["09:30", "12:00", "13:00", "15:00", "16:30", "17:30", "18:30",
+                  "19:30", "20:15", "21:00", "21:45", "22:30", "23:30", "00:30"]
+  slots_weekend: ["09:00", "10:30", "12:00", "13:00", "14:30", "15:30", "16:30",
+                  "17:30", "18:30", "19:30", "20:30", "21:30", "22:30", "00:00"]
+  instagram_slots: ["12:00", "13:00", "19:30", "20:15", "20:30", "21:00", "22:30", "00:00", "00:30"]
+  horizon_hours: 6          # only fill slots in the next 6 h, so every clip is fresh
   hashtags: ["#gta6", "#gtavi", "#gta", "#twitch", "#fyp"]
 
 work_dir: work

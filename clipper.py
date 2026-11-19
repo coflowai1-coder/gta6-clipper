@@ -627,40 +627,36 @@ def cmd_post_buffer(cfg, con):
     except Exception as e:
         log(f"cleanup skipped: {e}")
 
-    spacing = dt.timedelta(minutes=p.get("spacing_minutes", 45))
     now = dt.datetime.now(UTC)
-    last = con.execute("SELECT MAX(scheduled_at) m FROM clips WHERE scheduled_at IS NOT NULL").fetchone()["m"]
-    slot = max(now + dt.timedelta(minutes=5), (dt.datetime.fromisoformat(last) + spacing) if last else now)
     queued = con.execute("SELECT COUNT(*) n FROM clips WHERE status='scheduled' AND scheduled_at > ?", (now.isoformat(),)).fetchone()["n"]
     room = max(0, 9 - queued)  # Buffer free = 10 queued per channel
     rows = con.execute("SELECT * FROM clips WHERE status='approved' ORDER BY views DESC").fetchall()[:room]
-    cap = p.get("daily_cap", 12)
-    start_h, end_h = p.get("active_hours", [9, 24])
-    ig_every = max(1, p.get("instagram_every", 1))
-    per_day = {}
-    for (sa,) in con.execute("SELECT scheduled_at FROM clips WHERE scheduled_at IS NOT NULL"):
-        d = dt.datetime.fromisoformat(sa).astimezone().date()
-        per_day[d] = per_day.get(d, 0) + 1
-    total_sched = sum(per_day.values())
 
-    def allowed(h):  # end_h may go past midnight, e.g. [9, 27] = 9 AM – 3 AM
-        return start_h <= h < end_h if end_h <= 24 else (h >= start_h or h < end_h - 24)
+    # Peak-hour slot schedule (Toronto time), built from 2026 posting-time studies
+    used = [dt.datetime.fromisoformat(sa) for (sa,) in con.execute(
+        "SELECT scheduled_at FROM clips WHERE scheduled_at IS NOT NULL AND scheduled_at > ?",
+        ((now - dt.timedelta(hours=1)).isoformat(),))]
+    ig_slots = set(p.get("instagram_slots", []))
 
-    def fit(t):
-        for _ in range(30):
-            lt = t.astimezone()
-            if not allowed(lt.hour):
-                day = lt if lt.hour < start_h else lt + dt.timedelta(days=1)
-                t = day.replace(hour=start_h, minute=0, second=0, microsecond=0).astimezone(UTC)
-                continue
-            if per_day.get(lt.date(), 0) >= cap:
-                t = (lt + dt.timedelta(days=1)).replace(hour=start_h, minute=0, second=0, microsecond=0).astimezone(UTC)
-                continue
-            return t
-        return t
-    slot = fit(slot)
-    if not rows:
-        log("Nothing to post (or Buffer queue is full — 10 max on the free plan).")
+    def free_slots():
+        today = now.astimezone().replace(second=0, microsecond=0)
+        horizon = now + dt.timedelta(hours=p.get("horizon_hours", 6))
+        for d in range(-1, 3):
+            day = today + dt.timedelta(days=d)
+            key = "slots_weekend" if day.weekday() >= 5 else "slots_weekday"
+            for hm in p.get(key, []):
+                h, m = map(int, hm.split(":"))
+                t = day.replace(hour=h, minute=m)
+                if h < 6:  # after-midnight slots belong to the previous evening
+                    t += dt.timedelta(days=1)
+                t = t.astimezone(UTC)
+                if t < now + dt.timedelta(minutes=5) or t > horizon:
+                    continue
+                if any(abs((t - u).total_seconds()) < 20 * 60 for u in used):
+                    continue
+                yield t, hm
+
+    slots = sorted(free_slots())
     wd = ROOT / cfg["work_dir"]
     for r in rows:
         if not Path(r["video"]).exists():
@@ -671,9 +667,13 @@ def cmd_post_buffer(cfg, con):
         social = f"{m['caption']}\n\n🎥 {m['streamer']} (twitch.tv/{m['login']})\n{' '.join(m['hashtags'])}"
         try:
             video_url = sb_upload(Path(r["video"]))
+            if not slots:
+                log("No free posting slot in the next few hours — waiting for the next peak window.")
+                break
+            slot, hm = slots.pop(0)
             ok = []
             for c in chans:
-                if c["service"] == "instagram" and total_sched % ig_every != 0:
+                if c["service"] == "instagram" and ig_slots and hm not in ig_slots:
                     continue
                 meta = {}
                 if c["service"] == "instagram":
@@ -698,8 +698,7 @@ def cmd_post_buffer(cfg, con):
                         (str(newp), slot.isoformat(), r["id"]))
             con.commit()
             log(f"📅 {m['streamer']}: '{m['caption']}' → {', '.join(ok)} at {slot.astimezone():%a %I:%M %p}")
-            d = slot.astimezone().date(); per_day[d] = per_day.get(d, 0) + 1; total_sched += 1
-            slot = fit(slot + spacing)
+            used.append(slot)
         except Exception as e:
             log(f"❌ post failed for {r['id']}: {e}")
 
