@@ -505,6 +505,9 @@ def cmd_run_once(cfg, con):
         pool = [c for c in tw.clips(since, game_id=gid)
                 if (not a.get("language") or c.get("language", "").startswith(a["language"]))
                 and c["broadcaster_name"].lower() not in block]
+        allow = {b.lower() for b in a.get("only_streamers", [])}
+        if allow:
+            pool = [c for c in pool if c["broadcaster_name"].lower() in allow]
         tot = {}
         for c in pool:
             tot[c["broadcaster_name"]] = tot.get(c["broadcaster_name"], 0) + c["view_count"]

@@ -6,13 +6,18 @@ game_name: "Grand Theft Auto VI"
 # campaign, or a streamer who openly allows clippers). Use `discover` to find who's hot.
 streamers: auto            # auto = clip the biggest GTA 6 streamers right now
 auto:
-  top_n: 8                  # how many top streamers to follow
+  top_n: 30                  # follow every big streamer who is live on GTA 6
   block_streamers: [TheBurntPeanut]   # never clip these
+  # Only household-name streamers (Twitch usernames). The most viral clips among these win.
+  only_streamers: [KaiCenat, IShowSpeed, xQc, Jynxzi, caseoh_, HasanAbi, zackrawrr, Lacy, jasontheween,
+                   stableronaldo, summit1g, TimTheTatman, Ninja, shroud, sodapoppin, moistcr1tikal,
+                   Agent00, Fanum, sketch, ohnePixel, LIRIK, ExtraEmily, Emiru, pokimane, tarik,
+                   Clix, NICKMERCS, Tfue, plaqueboymax, BruceDropEmOff, Kaicenat]
   language: en              # English streams only (best for a Canadian/US audience)
 
 fetch:
   lookback_hours: 12        # only clips made in the last X hours (fresh = algorithm boost)
-  min_views: 1000            # Twitch clip views = proof the moment is good
+  min_views: 3000            # only clips already blowing up on Twitch
   min_seconds: 12           # skip tiny clips
   max_new_per_run: 6
   max_per_streamer: 99      # no limit — most viral wins
