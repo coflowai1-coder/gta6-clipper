@@ -669,6 +669,10 @@ def cmd_hot(cfg, args):
 
 
 def cmd_run_once(cfg, con):
+    try:
+        pull_inbox(cfg, con)
+    except Exception as e:
+        log(f"inbox check failed: {e}")
     tw = Twitch()
     gid = tw.game_id(cfg["game_name"])
     auto = cfg.get("streamers") == "auto"
@@ -768,50 +772,227 @@ def cmd_run_once(cfg, con):
         cmd_post(cfg, con)
 
 
+
+# ───────────────────────── YouTube post-live (unprocessed VOD) support ─────────────────────────
+YT_RC = ["--remote-components", "ejs:github"]
+
+
+def yt_fmt_url(url: str, fmt: str) -> str:
+    r = subprocess.run(["yt-dlp", *YT_RC, "--no-warnings", "-f", fmt, "-g", url], capture_output=True, text=True)
+    lines = [l for l in r.stdout.strip().splitlines() if l.startswith("http")]
+    if not lines:
+        raise RuntimeError(f"no stream url for format {fmt}: {r.stderr.strip()[-300:]}")
+    return lines[-1]
+
+
+def yt_seg(base: str, sq: int, tries: int = 3) -> bytes:
+    for i in range(tries):
+        try:
+            r = requests.get(f"{base}&sq={sq}", timeout=30)
+            if r.status_code == 200 and r.content:
+                return r.content
+        except requests.RequestException:
+            pass
+        time.sleep(1 + i)
+    return b""
+
+
+def yt_seg_len(base: str) -> float:
+    r = requests.get(f"{base}&sq=0", timeout=30)
+    ms, n = int(r.headers.get("X-Head-Time-Millis", 0)), int(r.headers.get("X-Head-Seqnum", 0))
+    return (ms / n / 1000) if ms and n else 2.0
+
+
+def yt_loudness_scan(aurl: str, dur: float, seg: float, every_s: float = 10) -> list[tuple[float, float]]:
+    """Fetch one short audio segment every `every_s` seconds and measure loudness (dB). Returns [(t, dB)]."""
+    import numpy as np
+    from concurrent.futures import ThreadPoolExecutor
+    step = max(1, round(every_s / seg))
+    sqs = list(range(0, int(dur / seg), step))
+    ff = _bin("ffmpeg")
+
+    def one(sq):
+        data = yt_seg(aurl, sq, tries=2)
+        if not data:
+            return None
+        p = subprocess.run([ff, "-v", "quiet", "-i", "pipe:0", "-ac", "1", "-ar", "8000", "-f", "s16le", "pipe:1"],
+                           input=data, capture_output=True)
+        a = np.frombuffer(p.stdout, dtype=np.int16).astype(np.float32)
+        if a.size < 800:
+            return None
+        rms = float(np.sqrt(np.mean(a ** 2))) + 1e-6
+        pk = float(np.percentile(np.abs(a), 99)) + 1e-6
+        return (sq * seg, 20 * np.log10(rms), 20 * np.log10(pk))
+
+    with ThreadPoolExecutor(12) as ex:
+        res = [r for r in ex.map(one, sqs) if r]
+    return res
+
+
+def yt_hype_peaks(samples, dur: float, n: int, gap: float = 600) -> list[float]:
+    """Moments that are much louder than the surrounding 10 minutes (screaming / big reactions)."""
+    import numpy as np
+    if not samples:
+        return []
+    t = np.array([s[0] for s in samples]); rms = np.array([s[1] for s in samples]); pk = np.array([s[2] for s in samples])
+    score = np.zeros_like(rms)
+    for i in range(len(t)):
+        m = np.abs(t - t[i]) <= 300
+        med, mad = np.median(rms[m]), np.median(np.abs(rms[m] - np.median(rms[m]))) + 0.5
+        score[i] = (rms[i] - med) / mad + 0.5 * (pk[i] - np.median(pk[m])) / mad
+    # smooth a little so sustained hype beats a single spike
+    sm = np.convolve(score, np.ones(3) / 3, mode="same")
+    chosen = []
+    for i in np.argsort(-sm):
+        ti = float(t[i])
+        if ti < 300 or ti > dur - 120:
+            continue
+        if all(abs(ti - c) > gap for c in chosen):
+            chosen.append(ti)
+        if len(chosen) >= n:
+            break
+    return chosen
+
+
+def yt_fetch_range(vurl: str, aurl: str, seg: float, a: float, b: float, out: Path) -> Path:
+    from concurrent.futures import ThreadPoolExecutor
+    sqs = list(range(int(a // seg), int(b // seg) + 1))
+    tmp_v, tmp_a = out.with_suffix(".v.mp4"), out.with_suffix(".a.mp4")
+    with ThreadPoolExecutor(8) as ex:
+        vs = list(ex.map(lambda q: yt_seg(vurl, q), sqs))
+        aus = list(ex.map(lambda q: yt_seg(aurl, q), sqs))
+    if not all(vs) or not all(aus):
+        raise RuntimeError("some video pieces failed to download")
+    tmp_v.write_bytes(b"".join(vs)); tmp_a.write_bytes(b"".join(aus))
+    subprocess.run([_bin("ffmpeg"), "-y", "-v", "error", "-i", str(tmp_v), "-i", str(tmp_a), "-map", "0:v:0", "-map", "1:a:0",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-r", "60", "-c:a", "aac", "-b:a", "192k",
+                    "-movflags", "+faststart", str(out)], check=True)
+    tmp_v.unlink(missing_ok=True); tmp_a.unlink(missing_ok=True)
+    return out
+
+
+def sb_put(name: str, data: bytes, ctype: str) -> None:
+    url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY")
+    r = requests.post(f"{url}/storage/v1/object/gta-clips/{name}", data=data, timeout=600,
+                      headers={"Authorization": f"Bearer {key}", "apikey": key, "Content-Type": ctype, "x-upsert": "true"})
+    if r.status_code >= 300:
+        raise RuntimeError(f"upload {r.status_code}: {r.text[:300]}")
+
+
+def send_to_inbox(con, cid: str) -> None:
+    """Mac-side: hand a rendered clip to the cloud poster (so caps/gaps stay in one place)."""
+    row = con.execute("SELECT * FROM clips WHERE id=?", (cid,)).fetchone()
+    if not row or row["status"] != "approved":
+        return
+    vid = Path(row["video"])
+    sb_put(f"inbox_{vid.name}", vid.read_bytes(), "video/mp4")
+    rec = {k: row[k] for k in row.keys()}
+    rec["video_name"] = vid.name
+    sb_put(f"inbox_{cid}.json", json.dumps(rec).encode(), "application/json")
+    con.execute("UPDATE clips SET status='sent-to-cloud' WHERE id=?", (cid,))
+    con.commit()
+    log(f"📤 sent {vid.name} to the cloud poster")
+
+
+def pull_inbox(cfg, con) -> None:
+    """Cloud-side: import clips the Mac rendered (YouTube streams) into the posting queue."""
+    url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY")
+    if not url or not key:
+        return
+    h = {"Authorization": f"Bearer {key}", "apikey": key}
+    r = requests.post(f"{url}/storage/v1/object/list/gta-clips", json={"prefix": "inbox_", "limit": 100}, headers=h, timeout=60)
+    if r.status_code >= 300:
+        return
+    names = [o["name"] for o in r.json()]
+    wd = ROOT / cfg["work_dir"]
+    done = []
+    for n in names:
+        if not n.endswith(".json"):
+            continue
+        try:
+            rec = requests.get(f"{url}/storage/v1/object/gta-clips/{n}", headers=h, timeout=60).json()
+            vname = rec["video_name"]
+            vr = requests.get(f"{url}/storage/v1/object/gta-clips/inbox_{vname}", headers=h, timeout=600)
+            if vr.status_code >= 300:
+                continue
+            out = wd / "approved" / vname
+            out.write_bytes(vr.content)
+            con.execute("INSERT OR REPLACE INTO clips(id,streamer,title,url,views,created_at,status,video,meta) VALUES(?,?,?,?,?,?,?,?,?)",
+                        (rec["id"], rec["streamer"], rec["title"], rec["url"], rec["views"], rec["created_at"], "approved", str(out), rec["meta"]))
+            con.commit()
+            done += [n, f"inbox_{vname}"]
+            log(f"📥 imported YouTube clip from the Mac: {vname}")
+        except Exception as e:
+            log(f"inbox import failed for {n}: {e}")
+    if done:
+        requests.delete(f"{url}/storage/v1/object/gta-clips", json={"prefixes": done}, headers=h, timeout=60)
+
+
 def cmd_ytvod(cfg, con, args):
     """Clip the most-replayed moments of a YouTube video/VOD and queue them for posting."""
     import hashlib
     url = args.url
-    r = subprocess.run(["yt-dlp", "-J", "--no-warnings", url], capture_output=True, text=True)
+    r = subprocess.run(["yt-dlp", *YT_RC, "-J", "--no-warnings", url], capture_output=True, text=True)
     if r.returncode != 0:
         log(f"❌ YouTube refused: {r.stderr.strip()[-400:]}")
-        alert("YouTube clip failed", "YouTube blocked the cloud server from downloading that video. Claude needs another way in.", key="yt")
+        alert("YouTube clip failed", "YouTube blocked the download of that video. Claude needs another way in.", key="yt")
         sys.exit(1)
     info = json.loads(r.stdout)
     title, channel = info.get("title", ""), info.get("channel") or info.get("uploader") or "Streamer"
     dur = float(info.get("duration") or 0)
-    log(f"YouTube: '{title}' by {channel} ({dur/3600:.1f} h)")
+    live = info.get("live_status")
+    log(f"YouTube: '{title}' by {channel} ({dur/3600:.1f} h, {live})")
     heat = info.get("heatmap") or []
     clip_len = cfg.get("max_seconds", 25) + 8
-    if heat:
-        peaks = sorted(heat, key=lambda h: -h["value"])
-        log(f"using YouTube 'most replayed' graph ({len(heat)} points)")
-    else:
-        log("no 'most replayed' data yet — sampling evenly across the video")
-        step = max(dur / (args.n + 1), clip_len)
-        peaks = [{"start_time": step * (i + 1), "end_time": step * (i + 1) + 1, "value": 1} for i in range(args.n)]
+    segmode = live in ("post_live", "is_live")
+    vurl = aurl = None
+    if segmode:
+        vurl = yt_fmt_url(url, "299/298/136/135")
+        aurl = yt_fmt_url(url, "140/139")
+        seg = yt_seg_len(vurl)
+        log(f"stream not processed by YouTube yet — reading it piece by piece ({seg:.1f}s pieces)")
     chosen = []
-    for h in peaks:
-        mid = (h["start_time"] + h["end_time"]) / 2
-        if mid < 60 or (dur and mid > dur - 30):
-            continue
-        if all(abs(mid - c) > 120 for c in chosen):
-            chosen.append(mid)
-        if len(chosen) >= args.n:
-            break
+    if heat:
+        log(f"using YouTube 'most replayed' graph ({len(heat)} points)")
+        for h in sorted(heat, key=lambda h: -h["value"]):
+            mid = (h["start_time"] + h["end_time"]) / 2
+            if mid < 60 or (dur and mid > dur - 30):
+                continue
+            if all(abs(mid - c) > 120 for c in chosen):
+                chosen.append(mid)
+            if len(chosen) >= args.n:
+                break
+    elif segmode:
+        lo_url = yt_fmt_url(url, "139/140")
+        log("no 'most replayed' data yet — scanning the whole stream for the loudest reactions…")
+        samples = yt_loudness_scan(lo_url, dur, seg, every_s=args.scan_every)
+        log(f"   measured {len(samples)} points")
+        chosen = yt_hype_peaks(samples, dur, args.n)
+    else:
+        log("no 'most replayed' data — sampling evenly across the video")
+        step = max(dur / (args.n + 1), clip_len)
+        chosen = [step * (i + 1) for i in range(args.n)]
     wd = ROOT / cfg["work_dir"]
     scfg = {"display": channel, "credit": f"{channel} • YouTube"}
+    made = []
     for mid in sorted(chosen):
-        a, b = max(0, mid - clip_len * 0.45), mid + clip_len * 0.55
+        win = 50 if segmode else clip_len
+        a, b = max(0, mid - win * 0.5), mid + win * 0.5
         cid = "yt_" + hashlib.md5(f"{url}{int(a)}".encode()).hexdigest()[:16]
         if con.execute("SELECT 1 FROM clips WHERE id=? AND status!='error'", (cid,)).fetchone():
             continue
         raw = wd / "raw" / f"{cid}.mp4"
-        r = subprocess.run(["yt-dlp", "-q", "--no-warnings", "-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080]/b",
-                            "--download-sections", f"*{a:.0f}-{b:.0f}", "--force-keyframes-at-cuts",
-                            "--merge-output-format", "mp4", "-o", str(raw), url], capture_output=True, text=True)
-        if r.returncode != 0 or not raw.exists():
-            log(f"❌ download failed at {a/60:.0f} min: {r.stderr.strip()[-300:]}")
+        try:
+            if segmode:
+                yt_fetch_range(vurl, aurl, seg, a, b, raw)
+            else:
+                r = subprocess.run(["yt-dlp", *YT_RC, "-q", "--no-warnings", "-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080]/b",
+                                    "--download-sections", f"*{a:.0f}-{b:.0f}", "--force-keyframes-at-cuts",
+                                    "--merge-output-format", "mp4", "-o", str(raw), url], capture_output=True, text=True)
+                if r.returncode != 0 or not raw.exists():
+                    raise RuntimeError(r.stderr.strip()[-300:])
+        except Exception as e:
+            log(f"❌ download failed at {a/60:.0f} min: {e}")
             continue
         clip = {"id": cid, "url": url, "title": f"{channel} GTA 6 moment", "broadcaster_name": channel,
                 "view_count": args.views, "created_at": dt.datetime.now(UTC).isoformat()}
@@ -820,6 +1001,14 @@ def cmd_ytvod(cfg, con, args):
         con.commit()
         log(f"✂️  clipping {channel} at {int(a//3600)}:{int(a%3600//60):02d}:{int(a%60):02d}")
         process_clip(cfg, con, clip, scfg)
+        made.append(cid)
+    if args.inbox:
+        for cid in made:
+            try:
+                send_to_inbox(con, cid)
+            except Exception as e:
+                log(f"❌ couldn't send {cid} to the cloud: {e}")
+        return
     if cfg["posting"].get("auto_post"):
         cmd_post(cfg, con)
 
@@ -1265,6 +1454,8 @@ def main():
     y = sub.add_parser("ytvod"); y.add_argument("url"); y.add_argument("--n", type=int, default=4)
     y.add_argument("--views", type=int, default=50000, help="priority (>=10k = fast lane)")
     y.add_argument("--autopost", action="store_true")
+    y.add_argument("--inbox", action="store_true", help="render here, let the cloud post it (keeps caps/gaps in one place)")
+    y.add_argument("--scan-every", type=float, default=10, help="seconds between loudness samples")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -1292,7 +1483,7 @@ def main():
     elif args.cmd == "cancel":
         cmd_cancel(cfg, con, args.name)
     elif args.cmd == "ytvod":
-        if args.autopost:
+        if args.autopost or args.inbox:
             cfg["posting"]["auto_post"] = True
         cmd_ytvod(cfg, con, args)
     elif args.cmd == "discover":
