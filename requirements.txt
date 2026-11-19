@@ -3,4 +3,4 @@ PyYAML>=6.0
 faster-whisper>=1.0
 yt-dlp>=2025.1.1
 nudenet>=3.4
-opencv-python-headless>=4.9
+opencv-python-headless>=4.9,<5

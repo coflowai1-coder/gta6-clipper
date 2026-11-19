@@ -410,11 +410,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 # ───────────────────────── webcam detection ─────────────────────────
 def detect_cam(src: Path, start: float, length: float):
     """Find the streamer's webcam: a face that stays in the same spot across frames.
-    Returns (x, y, w, h) as fractions of the frame, or None."""
+    Returns (x, y, w, h) as fractions of the frame, or None. Never raises."""
     try:
-        import cv2
-    except ImportError:
+        return _detect_cam(src, start, length)
+    except Exception as e:
+        log(f"   webcam detection skipped: {e}")
         return None
+
+
+def _detect_cam(src: Path, start: float, length: float):
+    import cv2
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         subprocess.run([FFMPEG, "-v", "error", "-ss", f"{start:.2f}", "-i", str(src), "-t", f"{length:.2f}",
