@@ -41,6 +41,7 @@ style:
   caption_y: 0.72                 # 0 = top, 1 = bottom
   hook_size: 64
   hook_margin: 170
+  burn_captions: false            # no added captions (streamers' own on-screen captions stay)
   show_hook: false                # no text box at the top
   hook_seconds: 0                 # 0 = keep hook on screen for the whole clip
   trim_start: true                # cut dead air before the first word

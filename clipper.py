@@ -575,7 +575,7 @@ def process_clip(cfg, con, clip: dict, streamer_cfg: dict) -> None:
         credit = streamer_cfg.get("credit") or cfg["style"].get("credit_template", "{streamer} • twitch.tv/{login}").format(
             streamer=streamer, login=clip["broadcaster_name"].lower())
         ass = wd / "raw" / f"{cid}.ass"
-        build_ass(words, copy["hook"] if cfg["style"].get("show_hook", True) else "", credit, length, cfg["style"], ass, start)
+        build_ass(words if cfg["style"].get("burn_captions", True) else [], copy["hook"] if cfg["style"].get("show_hook", True) else "", credit, length, cfg["style"], ass, start)
 
         target = "approved" if cfg["posting"].get("auto_post") else "review"
         out = wd / target / f"{re.sub(r'[^a-z0-9]+', '_', streamer.lower())}_{cid[:24]}.mp4"
