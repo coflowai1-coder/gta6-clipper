@@ -442,6 +442,8 @@ def has_burned_captions(src: Path, start: float, length: float, words: list) -> 
         return False
     hit = spoken & seen
     ratio = len(hit) / len(spoken)
+    if os.getenv("CAPTION_DEBUG"):
+        log(f"   caption check: {len(hit)}/{len(spoken)} spoken words seen on screen {sorted(hit)[:12]}")
     return len(hit) >= 4 and ratio >= 0.15
 
 

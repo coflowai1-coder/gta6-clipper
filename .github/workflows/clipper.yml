@@ -14,6 +14,10 @@ on:
         description: "Send this message to Jacob's phone"
         type: string
         default: ""
+      caption_test_url:
+        description: "Debug: test caption detection on a video URL"
+        type: string
+        default: ""
       cancel_name:
         description: "Cancel queued posts whose video name contains this"
         type: string
@@ -107,6 +111,19 @@ jobs:
         if: ${{ inputs.audit_only }}
         run: python clipper.py audit
 
+      - name: Caption detection test
+        if: ${{ inputs.caption_test_url != '' }}
+        env:
+          U: ${{ inputs.caption_test_url }}
+          CAPTION_DEBUG: "1"
+        run: |
+          curl -sSL -o /tmp/t.mp4 "$U"
+          python -c "
+          import sys; sys.argv=['x']
+          import clipper as C; from pathlib import Path
+          cfg=C.load_config(); w=C.transcribe(Path('/tmp/t.mp4'),'base')
+          print('RESULT has_captions =', C.has_burned_captions(Path('/tmp/t.mp4'),0,60,w))"
+
       - name: Cancel queued posts
         if: ${{ inputs.cancel_name != '' }}
         env:
@@ -142,7 +159,7 @@ jobs:
           path: work/review/*.mp4
 
       - name: Find, edit and schedule clips
-        if: ${{ !inputs.audit_only && !inputs.preview && inputs.yt_url == '' }}
+        if: ${{ !inputs.audit_only && !inputs.preview && inputs.yt_url == '' && inputs.caption_test_url == '' }}
         run: python clipper.py run --max ${{ inputs.post_now && 3 || 2 }} --hours ${{ inputs.post_now && 24 || 12 }} --autopost
 
       - name: Save progress
