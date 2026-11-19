@@ -1104,12 +1104,23 @@ def cmd_audit(cfg, con):
         for _ in range(20):
             a = f', after: "{after}"' if after else ""
             q = ('query { posts(first: 50%s, input: {organizationId: "%s", filter: {status: [scheduled]}}) '
-                 '{ edges { node { id dueAt text assets { source } } } pageInfo { hasNextPage endCursor } } }') % (a, o["id"])
+                 '{ edges { node { id dueAt text channelId assets { source } } } pageInfo { hasNextPage endCursor } } }') % (a, o["id"])
             d = buffer_q(q)["posts"]
             posts += [e["node"] for e in d["edges"]]
             if not d["pageInfo"]["hasNextPage"]:
                 break
             after = d["pageInfo"]["endCursor"]
+    # drop queued posts for platforms that are switched off (e.g. an account under review)
+    want = set(cfg["posting"].get("platforms", []))
+    off = {c["id"]: c["service"] for c in buffer_channels() if c["service"] not in want}
+    keep = []
+    for p_ in posts:
+        if p_.get("channelId") in off:
+            buffer_q("mutation($i: DeletePostInput!) { deletePost(input: $i) { __typename } }", {"i": {"id": p_["id"]}})
+            log(f"⏸️  removed queued {off[p_['channelId']]} post (platform paused)")
+        else:
+            keep.append(p_)
+    posts = keep
     by_url = {}
     for p_ in posts:
         for a_ in p_.get("assets") or []:
