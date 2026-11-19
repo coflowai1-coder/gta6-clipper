@@ -408,6 +408,43 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     path.write_text(head + "\n".join(ev) + "\n", encoding="utf-8")
 
 
+# ───────────────────────── burned-in caption detection ─────────────────────────
+_STOP = set("that this with have what just like they them then there their your youre about would could should "
+            "were been from into because yeah okay gonna wanna really right know think going here where when "
+            "dont cant will well were what's that's it's i'm".split())
+
+
+def has_burned_captions(src: Path, start: float, length: float, words: list) -> bool:
+    """True if the stream already shows its own captions (on-screen text matches what's being said)."""
+    try:
+        import pytesseract
+        from PIL import Image, ImageOps
+    except ImportError:
+        return False
+    spoken = {re.sub(r"[^a-z']", "", w["w"].lower()) for w in words}
+    spoken = {w for w in spoken if len(w) >= 4 and w not in _STOP}
+    if len(spoken) < 4:
+        return False
+    import tempfile
+    seen = set()
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run([FFMPEG, "-v", "error", "-ss", f"{start:.2f}", "-i", str(src), "-t", f"{length:.2f}",
+                            "-vf", "fps=2/3,scale=1920:-2", f"{td}/f%03d.png"], check=True)
+            for f in sorted(Path(td).glob("*.png")):
+                g = ImageOps.grayscale(Image.open(f))
+                bright = ImageOps.invert(g.point(lambda p: 255 if p > 190 else 0))  # white caption text
+                for im in (g, bright):
+                    txt = pytesseract.image_to_string(im, config="--psm 11")
+                    seen |= {re.sub(r"[^a-z']", "", t.lower()) for t in txt.split()}
+    except Exception as e:
+        log(f"   caption check skipped: {e}")
+        return False
+    hit = spoken & seen
+    ratio = len(hit) / len(spoken)
+    return len(hit) >= 4 and ratio >= 0.15
+
+
 # ───────────────────────── webcam detection ─────────────────────────
 def detect_cam(src: Path, start: float, length: float):
     """Find the streamer's webcam: a face that stays in the same spot across frames.
@@ -575,7 +612,12 @@ def process_clip(cfg, con, clip: dict, streamer_cfg: dict) -> None:
         credit = streamer_cfg.get("credit") or cfg["style"].get("credit_template", "{streamer} • twitch.tv/{login}").format(
             streamer=streamer, login=clip["broadcaster_name"].lower())
         ass = wd / "raw" / f"{cid}.ass"
-        build_ass(words if cfg["style"].get("burn_captions", True) else [], copy["hook"] if cfg["style"].get("show_hook", True) else "", credit, length, cfg["style"], ass, start)
+        mode_c = cfg["style"].get("burn_captions", True)
+        add_caps = bool(mode_c)
+        if mode_c == "auto":
+            add_caps = not has_burned_captions(raw, start, length, words)
+            log(f"   captions: {'adding mine' if add_caps else 'stream already has captions — keeping theirs only'}")
+        build_ass(words if add_caps else [], copy["hook"] if cfg["style"].get("show_hook", True) else "", credit, length, cfg["style"], ass, start)
 
         target = "approved" if cfg["posting"].get("auto_post") else "review"
         out = wd / target / f"{re.sub(r'[^a-z0-9]+', '_', streamer.lower())}_{cid[:24]}.mp4"
