@@ -10,6 +10,10 @@ on:
         description: "Test: post clips ~10 min from now"
         type: boolean
         default: false
+      test_alert:
+        description: "Send a test phone alert"
+        type: boolean
+        default: false
       audit_only:
         description: "Only re-check queued posts and delete unsafe ones"
         type: boolean
@@ -39,6 +43,15 @@ jobs:
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Test phone alert
+        if: ${{ inputs.test_alert }}
+        run: |
+          T=$(grep ntfy_topic config.yaml | awk '{print $2}')
+          curl -s -H "Title: Test alert ✅" -H "Tags: moneybag" -H "Priority: high" \
+            -d "Campaign alerts are working! When a Lacy / Clix / YourRAGE clip goes live you'll get one of these — then submit the links in Content Rewards." \
+            "https://ntfy.sh/$T"
+          exit 0
 
       - uses: actions/setup-python@v5
         with:
