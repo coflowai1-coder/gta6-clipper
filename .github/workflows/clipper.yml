@@ -99,6 +99,17 @@ jobs:
         if: ${{ inputs.preview }}
         run: python clipper.py run --any --max 4 --hours 12 --preview
 
+      - name: Save preview stills
+        if: ${{ inputs.preview }}
+        run: |
+          mkdir -p preview && rm -f preview/*.jpg
+          for f in work/review/*.mp4; do
+            n=$(basename "$f" .mp4)
+            ffmpeg -v error -y -i "$f" -vf "fps=1/6,scale=270:-2,tile=4x1" -frames:v 1 "preview/$n.jpg"
+          done
+          git config user.name "clipper-bot"; git config user.email "clipper-bot@users.noreply.github.com"
+          git add preview && git commit -qm "preview stills" && git pull -q --rebase && git push -q || true
+
       - uses: actions/upload-artifact@v4
         if: ${{ inputs.preview }}
         with:
