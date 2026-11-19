@@ -117,7 +117,7 @@ jobs:
           U: ${{ inputs.caption_test_url }}
           CAPTION_DEBUG: "1"
         run: |
-          curl -sSL -o /tmp/t.mp4 "$U"
+          yt-dlp -q -f "best[ext=mp4]/best" -o /tmp/t.mp4 "$U"
           python -c "
           import sys; sys.argv=['x']
           import clipper as C; from pathlib import Path
