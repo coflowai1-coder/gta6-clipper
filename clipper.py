@@ -703,7 +703,7 @@ def cmd_run_once(cfg, con):
                 continue
             if is_inappropriate(c["title"]):
                 continue
-            c["_score"] = views_per_hour(c)
+            c["_score"] = c["view_count"] if cfg["fetch"].get("rank_by") == "views" else views_per_hour(c)
             if c["broadcaster_name"].lower() in CAMPAIGNS:
                 c["_score"] *= cfg.get("campaign_boost", 4)  # paid campaigns first
             c["_login"] = c["broadcaster_name"].lower()
