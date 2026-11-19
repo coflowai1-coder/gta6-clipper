@@ -1302,7 +1302,15 @@ def cmd_post_buffer(cfg, con):
             yt_today = sum(1 for (sa, pl) in con.execute(
                 "SELECT scheduled_at, platforms FROM clips WHERE platforms LIKE '%youtube%'")
                 if pday(dt.datetime.fromisoformat(sa)) == pday(slot))
+            ig_limit = p.get("instagram_daily", 99)
+            ig_gap = p.get("instagram_gap_hours", 0)
+            ig_rows = [dt.datetime.fromisoformat(sa) for (sa,) in con.execute(
+                "SELECT scheduled_at FROM clips WHERE platforms LIKE '%instagram%'")]
+            ig_today = sum(1 for t in ig_rows if pday(t) == pday(slot))
+            ig_close = any(abs((slot - t).total_seconds()) < ig_gap * 3600 for t in ig_rows)
             for c in chans:
+                if c["service"] == "instagram" and (ig_today >= ig_limit or ig_close):
+                    continue  # warming Instagram back up slowly after the review
                 if c["service"] == "youtube" and yt_today >= yt_limit:
                     continue  # YouTube only allows a few posts/day on this channel — save them for the best clips
                 if c["service"] == "instagram" and ig_slots and (
