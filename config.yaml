@@ -7,6 +7,7 @@ game_name: "Grand Theft Auto VI"
 streamers: auto            # auto = clip the biggest GTA 6 streamers right now
 auto:
   top_n: 8                  # how many top streamers to follow
+  block_streamers: [TheBurntPeanut]   # never clip these
   language: en              # English streams only (best for a Canadian/US audience)
 
 fetch:

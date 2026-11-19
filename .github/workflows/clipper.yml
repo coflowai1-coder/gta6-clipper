@@ -1,14 +1,17 @@
 name: GTA 6 clipper
 
 on:
-  # schedule:
+  schedule:
     # every hour, 24/7 (posts still only go out 9 AM – 3 AM Toronto)
-    # PAUSED — uncomment to resume
-    # - cron: "7 * * * *"
+    - cron: "7 * * * *"
   workflow_dispatch:
     inputs:
       post_now:
         description: "Test: post clips ~10 min from now"
+        type: boolean
+        default: false
+      audit_only:
+        description: "Only re-check queued posts and delete unsafe ones"
         type: boolean
         default: false
 
@@ -59,7 +62,12 @@ jobs:
       - name: Install Python packages
         run: pip install -q -r requirements.txt
 
+      - name: Safety audit of queued posts
+        if: ${{ inputs.audit_only }}
+        run: python clipper.py audit
+
       - name: Find, edit and schedule clips
+        if: ${{ !inputs.audit_only }}
         run: python clipper.py run --max ${{ inputs.post_now && 3 || 2 }} --hours ${{ inputs.post_now && 24 || 6 }} --autopost
 
       - name: Save progress

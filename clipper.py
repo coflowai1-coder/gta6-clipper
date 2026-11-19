@@ -152,8 +152,9 @@ class Twitch:
 
 
 BLOCK = re.compile(
-    r"strip ?club|stripper|lap ?dance|private dance|horny|\bsex|nsfw|nude|naked|porn|onlyfans|boob|tits|"
-    r"twerk|hooker|prostitut|\brape|thirst|\bnut\b|gooning|"
+    r"strip ?club|stripper|strip ?tease|lap ?dance|private dance|pole ?danc|horny|\bsex|nsfw|nude|naked|porn|onlyfans|"
+    r"boob|tits|titty|booty|\bthicc?\b|gyat|\bcheeks\b|bikini|lingerie|\bfreaky\b|"
+    r"twerk|hooker|prostitut|brothel|escort|\brape|thirst|\bnut\b|gooning|\bhot ?tub|"
     r"n[i1]gg|f[a@]gg?[o0]?t|\bretard|tranny|\bkys\b|kill yourself", re.I)
 SWEARS = re.compile(r"\b(f+u+c+k\w*|sh[i1]t\w*|b[i1]tch\w*|ass(hole)?|dick\w*|pussy|c+u+n+t\w*|damn)\b", re.I)
 
@@ -164,6 +165,37 @@ def is_inappropriate(*texts) -> bool:
 
 def censor(word: str) -> str:
     return SWEARS.sub(lambda m: m.group(0)[0] + "*" * (len(m.group(0)) - 1), word)
+
+
+_nude = None
+NSFW_HARD = {"FEMALE_BREAST_EXPOSED", "FEMALE_GENITALIA_EXPOSED", "MALE_GENITALIA_EXPOSED",
+             "BUTTOCKS_EXPOSED", "ANUS_EXPOSED"}
+NSFW_SOFT = {"FEMALE_BREAST_COVERED", "BUTTOCKS_COVERED", "FEMALE_GENITALIA_COVERED", "BELLY_EXPOSED"}
+
+
+def nsfw_check(video: Path, start: float = 0, length: float = 600) -> str:
+    """Scan ~1 frame/second with NudeNet. Returns a reason string if the clip should be blocked."""
+    global _nude
+    try:
+        from nudenet import NudeDetector
+    except ImportError:
+        return ""
+    if _nude is None:
+        _nude = NudeDetector()
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        subprocess.run([FFMPEG, "-v", "error", "-ss", f"{start:.2f}", "-i", str(video), "-t", f"{length:.2f}",
+                        "-vf", "fps=1,scale=640:-2", f"{td}/f%03d.jpg"], check=True)
+        soft_hits = 0
+        for f in sorted(Path(td).glob("*.jpg")):
+            for d in _nude.detect(str(f)):
+                if d["class"] in NSFW_HARD and d["score"] >= 0.35:
+                    return f"nudity ({d['class'].lower()})"
+                if d["class"] in NSFW_SOFT and d["score"] >= 0.55:
+                    soft_hits += 1
+        if soft_hits >= 3:
+            return f"sexual/suggestive visuals ({soft_hits} frames)"
+    return ""
 
 
 def views_per_hour(c: dict) -> float:
@@ -409,6 +441,12 @@ def process_clip(cfg, con, clip: dict, streamer_cfg: dict) -> None:
                 start = min(inside[0]["s"] - 0.35, start + 3.0)
         length = min(total - start, target)
 
+        bad = nsfw_check(raw, start, length)
+        if bad:
+            con.execute("UPDATE clips SET status='skipped', error=? WHERE id=?", (f"inappropriate: {bad}", cid))
+            con.commit()
+            log(f"🚫 skipped {streamer}: {bad}")
+            return
         copy = write_copy(cfg, streamer, clip["title"], words)
         credit = cfg["style"].get("credit_template", "{streamer} • twitch.tv/{login}").format(
             streamer=streamer, login=clip["broadcaster_name"].lower())
@@ -463,13 +501,16 @@ def cmd_run_once(cfg, con):
     candidates = []
     if auto and not cfg.get("_any"):  # pick the N biggest streamers by GTA 6 clip views
         a = cfg.get("auto", {})
+        block = {b.lower() for b in a.get("block_streamers", [])}
         pool = [c for c in tw.clips(since, game_id=gid)
-                if not a.get("language") or c.get("language", "").startswith(a["language"])]
+                if (not a.get("language") or c.get("language", "").startswith(a["language"]))
+                and c["broadcaster_name"].lower() not in block]
         tot = {}
         for c in pool:
             tot[c["broadcaster_name"]] = tot.get(c["broadcaster_name"], 0) + c["view_count"]
         top = sorted(tot, key=lambda k: -tot[k])[: a.get("top_n", 5)]
         log("auto-picked streamers: " + ", ".join(f"{t} ({tot[t]:,} views)" for t in top))
+        block = {b.lower() for b in a.get("block_streamers", [])}
         pool = [c for c in pool if c["broadcaster_name"] in top]
         for c in pool:
             streamers.setdefault(c["broadcaster_name"].lower(), {"login": c["broadcaster_name"].lower(), "display": c["broadcaster_name"]})
@@ -609,6 +650,53 @@ def sb_cleanup(con):
     if r.status_code < 300:
         con.executemany("UPDATE clips SET error='hosted-deleted' WHERE id=?", [(r_["id"],) for r_ in rows])
         con.commit()
+
+
+def cmd_audit(cfg, con):
+    """Re-check every queued Buffer post with the safety filters; delete the ones that fail."""
+    orgs = buffer_q("query { account { organizations { id } } }")["account"]["organizations"]
+    posts = []
+    for o in orgs:
+        after = None
+        for _ in range(20):
+            a = f', after: "{after}"' if after else ""
+            q = ('query { posts(first: 50%s, input: {organizationId: "%s", filter: {status: [scheduled]}}) '
+                 '{ edges { node { id dueAt text assets { source } } } pageInfo { hasNextPage endCursor } } }') % (a, o["id"])
+            d = buffer_q(q)["posts"]
+            posts += [e["node"] for e in d["edges"]]
+            if not d["pageInfo"]["hasNextPage"]:
+                break
+            after = d["pageInfo"]["endCursor"]
+    by_url = {}
+    for p_ in posts:
+        for a_ in p_.get("assets") or []:
+            if a_.get("source"):
+                by_url.setdefault(a_["source"], []).append(p_)
+    log(f"Auditing {len(posts)} queued posts ({len(by_url)} videos)")
+    import tempfile
+    for url, plist in by_url.items():
+        name = url.rsplit("/", 1)[-1]
+        row = con.execute("SELECT id, title FROM clips WHERE video LIKE ?", (f"%{name}",)).fetchone()
+        reason = "bad title/caption" if is_inappropriate(row["title"] if row else "", plist[0].get("text", "")) else ""
+        if not reason:
+            with tempfile.TemporaryDirectory() as td:
+                f = Path(td) / name
+                r = requests.get(url, timeout=120)
+                if r.status_code != 200:
+                    log(f"   can't download {name} ({r.status_code}) — leaving it")
+                    continue
+                f.write_bytes(r.content)
+                reason = nsfw_check(f)
+        if reason:
+            for p_ in plist:
+                buffer_q("mutation($i: DeletePostInput!) { deletePost(input: $i) { __typename } }", {"i": {"id": p_["id"]}})
+            if row:
+                con.execute("UPDATE clips SET status='removed', error=? WHERE id=?", (f"audit: {reason}", row["id"]))
+                con.commit()
+            when = dt.datetime.fromisoformat(plist[0]["dueAt"].replace("Z", "+00:00")).astimezone()
+            log(f"🗑️  removed {len(plist)} queued post(s) for {when:%a %I:%M %p} — {reason}")
+        else:
+            log(f"   ok: {name}")
 
 
 def cmd_post_buffer(cfg, con):
@@ -811,7 +899,7 @@ def main():
     r.add_argument("--hours", type=int, help="lookback hours")
     r.add_argument("--any", action="store_true", help="test: use top clips from any streamer")
     r.add_argument("--autopost", action="store_true", help="approve + schedule clips that pass the safety filter")
-    sub.add_parser("approve"); sub.add_parser("post"); sub.add_parser("stats")
+    sub.add_parser("approve"); sub.add_parser("post"); sub.add_parser("stats"); sub.add_parser("audit")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -836,7 +924,7 @@ def main():
     elif args.cmd == "discover":
         cmd_discover(cfg, args)
     else:
-        {"check": cmd_check, "approve": cmd_approve, "post": cmd_post, "stats": cmd_stats}[args.cmd](cfg, con)
+        {"check": cmd_check, "approve": cmd_approve, "post": cmd_post, "stats": cmd_stats, "audit": cmd_audit}[args.cmd](cfg, con)
 
 
 if __name__ == "__main__":
