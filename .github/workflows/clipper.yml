@@ -14,6 +14,10 @@ on:
         description: "Send this message to Jacob's phone"
         type: string
         default: ""
+      preview:
+        description: "Render a few clips for review (no posting)"
+        type: boolean
+        default: false
       test_alert:
         description: "Send a test phone alert"
         type: boolean
@@ -91,12 +95,22 @@ jobs:
         if: ${{ inputs.audit_only }}
         run: python clipper.py audit
 
+      - name: Preview render (no posting)
+        if: ${{ inputs.preview }}
+        run: python clipper.py run --any --max 4 --hours 12 --preview
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.preview }}
+        with:
+          name: preview
+          path: work/review/*.mp4
+
       - name: Find, edit and schedule clips
-        if: ${{ !inputs.audit_only }}
+        if: ${{ !inputs.audit_only && !inputs.preview }}
         run: python clipper.py run --max ${{ inputs.post_now && 3 || 2 }} --hours ${{ inputs.post_now && 24 || 12 }} --autopost
 
       - name: Save progress
-        if: always()
+        if: ${{ always() && !inputs.preview }}
         run: |
           git config user.name "clipper-bot"
           git config user.email "clipper-bot@users.noreply.github.com"

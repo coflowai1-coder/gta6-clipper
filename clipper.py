@@ -407,11 +407,76 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     path.write_text(head + "\n".join(ev) + "\n", encoding="utf-8")
 
 
+# ───────────────────────── webcam detection ─────────────────────────
+def detect_cam(src: Path, start: float, length: float):
+    """Find the streamer's webcam: a face that stays in the same spot across frames.
+    Returns (x, y, w, h) as fractions of the frame, or None."""
+    try:
+        import cv2
+    except ImportError:
+        return None
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        subprocess.run([FFMPEG, "-v", "error", "-ss", f"{start:.2f}", "-i", str(src), "-t", f"{length:.2f}",
+                        "-vf", "fps=1/2,scale=960:-2", f"{td}/f%03d.jpg"], check=True)
+        frames = sorted(Path(td).glob("*.jpg"))
+        if not frames:
+            return None
+        casc = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        hits, W, H = [], 960, 540
+        for f in frames:
+            img = cv2.imread(str(f))
+            H, W = img.shape[:2]
+            g = cv2.equalizeHist(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
+            for (x, y, w, h) in casc.detectMultiScale(g, 1.1, 6, minSize=(int(W * 0.04), int(W * 0.04))):
+                hits.append((x + w / 2, y + h / 2, w))
+        if not hits:
+            return None
+        # webcam = the face position that repeats across many frames (game faces move around)
+        best, best_n = None, 0
+        for (cx, cy, w) in hits:
+            n = sum(1 for (x2, y2, _) in hits if abs(x2 - cx) < W * 0.05 and abs(y2 - cy) < H * 0.06)
+            if n > best_n:
+                best, best_n = (cx, cy, w), n
+        if best_n < max(2, len(frames) * 0.4):
+            return None
+        group = [h for h in hits if abs(h[0] - best[0]) < W * 0.05 and abs(h[1] - best[1]) < H * 0.06]
+        cx = sum(h[0] for h in group) / len(group)
+        cy = sum(h[1] for h in group) / len(group)
+        fw = sorted(h[2] for h in group)[len(group) // 2]
+        # webcam box ≈ face × 3.2 wide, 16:9-ish, face slightly above centre
+        bw = min(W, fw * 3.2)
+        bh = min(H, bw * 0.75)
+        x0 = min(max(0, cx - bw / 2), W - bw)
+        y0 = min(max(0, cy - bh * 0.45), H - bh)
+        return (x0 / W, y0 / H, bw / W, bh / H)
+
+
 # ───────────────────────── render ─────────────────────────
 def render(src: Path, out: Path, ass: Path, layout: dict, start: float, length: float) -> None:
     ass_f = ass.name  # ffmpeg runs inside the subtitle's folder, so a plain filename is enough
     mode = layout.get("mode", "blur")
-    if mode == "stack" and layout.get("facecam"):
+    if mode == "full":
+        cam = layout.get("_cam")
+        if cam:
+            x, y, w, h = cam
+            fc = (
+                "[0:v]split=3[a][b][c];"
+                "[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:6,eq=brightness=-0.15[bg];"
+                f"[b]crop=iw*{w:.4f}:ih*{h:.4f}:iw*{x:.4f}:ih*{y:.4f},scale=1080:720:force_original_aspect_ratio=increase,crop=1080:720[cam];"
+                "[c]scale=1080:-2[game];"
+                "[bg][cam]overlay=0:150[t1];[t1][game]overlay=0:890,setsar=1,"
+                f"ass=filename={ass_f}[v]"
+            )
+        else:
+            fc = (
+                "[0:v]split=2[a][b];"
+                "[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:6,eq=brightness=-0.15[bg];"
+                "[b]scale=1080:-2[game];"
+                "[bg][game]overlay=0:(H-h)/2-80,setsar=1,"
+                f"ass=filename={ass_f}[v]"
+            )
+    elif mode == "stack" and layout.get("facecam"):
         x, y, w, h = layout["facecam"]  # fractions of source frame
         top_h = layout.get("facecam_height", 760)
         bot_h = 1920 - top_h
@@ -468,6 +533,12 @@ def process_clip(cfg, con, clip: dict, streamer_cfg: dict) -> None:
                 start = min(inside[0]["s"] - 0.35, start + 3.0)
         length = min(total - start, target)
 
+        layout = {**cfg.get("layout", {}), **streamer_cfg.get("layout", {})}
+        if layout.get("mode") == "full":
+            layout["_cam"] = detect_cam(raw, start, length)
+            # captions sit below the stream when there's a webcam zoom, otherwise under the centred stream
+            cfg["style"]["caption_y"] = 0.86 if layout["_cam"] else 0.78
+            log(f"   layout: full stream{' + webcam zoom' if layout['_cam'] else ''}")
         bad = nsfw_check(raw, start, length)
         if bad:
             con.execute("UPDATE clips SET status='skipped', error=? WHERE id=?", (f"inappropriate: {bad}", cid))
@@ -480,7 +551,6 @@ def process_clip(cfg, con, clip: dict, streamer_cfg: dict) -> None:
         ass = wd / "raw" / f"{cid}.ass"
         build_ass(words, copy["hook"] if cfg["style"].get("show_hook", True) else "", credit, length, cfg["style"], ass, start)
 
-        layout = {**cfg.get("layout", {}), **streamer_cfg.get("layout", {})}
         target = "approved" if cfg["posting"].get("auto_post") else "review"
         out = wd / target / f"{re.sub(r'[^a-z0-9]+', '_', streamer.lower())}_{cid[:24]}.mp4"
         render(raw, out, ass, layout, start, length)
@@ -1008,6 +1078,7 @@ def main():
     r.add_argument("--hours", type=int, help="lookback hours")
     r.add_argument("--any", action="store_true", help="test: use top clips from any streamer")
     r.add_argument("--autopost", action="store_true", help="approve + schedule clips that pass the safety filter")
+    r.add_argument("--preview", action="store_true", help="render clips only, never post")
     sub.add_parser("approve"); sub.add_parser("post"); sub.add_parser("stats"); sub.add_parser("audit")
     args = ap.parse_args()
 
@@ -1019,6 +1090,7 @@ def main():
         if args.hours: cfg["fetch"]["lookback_hours"] = args.hours
         if args.any: cfg["_any"] = True; cfg["fetch"]["min_views"] = 20
         if args.autopost: cfg["posting"]["auto_post"] = True
+        if args.preview: cfg["posting"]["auto_post"] = False
         while True:
             try:
                 cmd_run_once(cfg, con)

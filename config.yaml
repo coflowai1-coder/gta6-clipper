@@ -29,7 +29,7 @@ llm_model: claude-haiku-5-5 # used only if ANTHROPIC_API_KEY is set
 
 # ── Look ──────────────────────────────────────────────────────
 layout:
-  mode: blur                # blur = gameplay centred on blurred background | stack = facecam on top
+  mode: full                # full = whole stream uncropped + zoomed webcam on top (auto-detected)
   game_aspect: 1.25         # how tightly to crop gameplay (lower = more zoom)
   lift: 60                  # push gameplay up a bit so captions sit below it
 
