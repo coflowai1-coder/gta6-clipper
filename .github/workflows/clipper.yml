@@ -10,6 +10,10 @@ on:
         description: "Test: post clips ~10 min from now"
         type: boolean
         default: false
+      alert_message:
+        description: "Send this message to Jacob's phone"
+        type: string
+        default: ""
       test_alert:
         description: "Send a test phone alert"
         type: boolean
@@ -43,6 +47,14 @@ jobs:
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Message to phone
+        if: ${{ inputs.alert_message != '' }}
+        env:
+          MSG: ${{ inputs.alert_message }}
+        run: |
+          T=$(grep ntfy_topic config.yaml | awk '{print $2}')
+          curl -s -H "Title: Clipper update" -H "Tags: robot" -H "Priority: high" -d "$MSG" "https://ntfy.sh/$T"
 
       - name: Test phone alert
         if: ${{ inputs.test_alert }}
@@ -90,3 +102,11 @@ jobs:
           git config user.email "clipper-bot@users.noreply.github.com"
           git add work/state.db
           git diff --cached --quiet || (git commit -q -m "clipper run $(date '+%a %H:%M')" && git push -q)
+
+      - name: Alert on failure
+        if: failure()
+        run: |
+          T=$(grep ntfy_topic config.yaml | awk '{print $2}')
+          curl -s -H "Title: ⚠️ Clipper run failed" -H "Tags: warning" -H "Priority: high" \
+            -d "A clipper run crashed at $(date '+%I:%M %p'). Queued posts still go out. Claude checks and fixes this on the next check-in." \
+            "https://ntfy.sh/$T"

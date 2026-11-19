@@ -87,6 +87,25 @@ def load_config() -> dict:
 CAMPAIGNS = {}  # twitch login -> required hashtag (filled from config.yaml "campaigns")
 
 
+_alerted = set()
+
+
+def alert(title: str, msg: str, key: str = "") -> None:
+    """Push a problem alert to Jacob's phone (ntfy). Sent at most once per run per key."""
+    k = key or title
+    if k in _alerted:
+        return
+    _alerted.add(k)
+    try:
+        cfgp = ROOT / "config.yaml"
+        topic = (yaml.safe_load(cfgp.read_text()).get("posting") or {}).get("ntfy_topic")
+        if topic:
+            requests.post(f"https://ntfy.sh/{topic}", data=msg.encode(), timeout=20,
+                          headers={"Title": title, "Tags": "warning", "Priority": "high"})
+    except Exception:
+        pass
+
+
 def log(msg: str) -> None:
     print(f"[{dt.datetime.now():%H:%M:%S}] {msg}", flush=True)
 
@@ -723,7 +742,11 @@ def cmd_post_buffer(cfg, con):
     chans = [c for c in buffer_channels() if c["service"] in want and not c.get("isQueuePaused")]
     if not chans:
         log(f"No Buffer channels found for {sorted(want)} — connect them at buffer.com")
+        alert("⚠️ Buffer accounts disconnected", "Buffer has no connected TikTok/Instagram/YouTube channels (or the queue is paused). Open buffer.com and reconnect / unpause.")
         return
+    missing = want - {c["service"] for c in chans}
+    if missing:
+        alert("⚠️ Buffer channel missing", f"{', '.join(sorted(missing))} is disconnected or paused in Buffer. Open buffer.com → reconnect it.", key="missing")
     log("Buffer channels: " + ", ".join(f"{c['service']} ({c['name']})" for c in chans))
     try:
         sb_cleanup(con)
@@ -832,6 +855,7 @@ def cmd_post_buffer(cfg, con):
                 res = buffer_q(CREATE_POST, {"input": inp})["createPost"]
                 if res.get("message"):
                     log(f"   ⚠️ {c['service']}: {res['message']}")
+                    alert(f"⚠️ {c['service'].title()} post rejected", f"Buffer refused a post to {c['service']}: {res['message'][:200]}. Claude will look at it on the next check-in.", key=c["service"])
                 else:
                     ok.append(c["service"])
             if not ok:
