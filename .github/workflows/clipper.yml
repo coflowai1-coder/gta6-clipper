@@ -14,6 +14,10 @@ on:
         description: "Send this message to Jacob's phone"
         type: string
         default: ""
+      hot:
+        description: "Just list what's hot right now"
+        type: boolean
+        default: false
       caption_test_url:
         description: "Debug: test caption detection on a video URL"
         type: string
@@ -111,6 +115,10 @@ jobs:
         if: ${{ inputs.audit_only }}
         run: python clipper.py audit
 
+      - name: What's hot
+        if: ${{ inputs.hot }}
+        run: python clipper.py hot --hours 6
+
       - name: Caption detection test
         if: ${{ inputs.caption_test_url != '' }}
         env:
@@ -159,7 +167,7 @@ jobs:
           path: work/review/*.mp4
 
       - name: Find, edit and schedule clips
-        if: ${{ !inputs.audit_only && !inputs.preview && inputs.yt_url == '' && inputs.caption_test_url == '' }}
+        if: ${{ !inputs.audit_only && !inputs.preview && inputs.yt_url == '' && inputs.caption_test_url == '' && !inputs.hot }}
         run: python clipper.py run --max ${{ inputs.post_now && 3 || 2 }} --hours ${{ inputs.post_now && 24 || 12 }} --autopost
 
       - name: Save progress

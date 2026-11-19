@@ -656,6 +656,18 @@ def cmd_discover(cfg, args):
     print("\nAdd the ones you have permission / a paid campaign for to config.yaml -> streamers.")
 
 
+def cmd_hot(cfg, args):
+    tw = Twitch()
+    gid = tw.game_id(cfg["game_name"])
+    since = dt.datetime.now(UTC) - dt.timedelta(hours=args.hours)
+    clips = [c for c in tw.clips(since, game_id=gid) if c.get("language", "").startswith("en")]
+    clips.sort(key=lambda c: -c["view_count"])
+    print(f"HOT GTA 6 clips (English), last {args.hours}h:")
+    for c in clips[:20]:
+        age = (dt.datetime.now(UTC) - dt.datetime.fromisoformat(c["created_at"].replace("Z", "+00:00"))).total_seconds() / 3600
+        print(f"HOT | {c['view_count']:>7,} | {c['broadcaster_name']:<16} | {age:4.1f}h ago | {c['title'][:60]}")
+
+
 def cmd_run_once(cfg, con):
     tw = Twitch()
     gid = tw.game_id(cfg["game_name"])
@@ -1249,6 +1261,7 @@ def main():
     r.add_argument("--preview", action="store_true", help="render clips only, never post")
     sub.add_parser("approve"); sub.add_parser("post"); sub.add_parser("stats"); sub.add_parser("audit")
     x = sub.add_parser("cancel"); x.add_argument("name")
+    hh = sub.add_parser("hot"); hh.add_argument("--hours", type=int, default=6)
     y = sub.add_parser("ytvod"); y.add_argument("url"); y.add_argument("--n", type=int, default=4)
     y.add_argument("--views", type=int, default=50000, help="priority (>=10k = fast lane)")
     y.add_argument("--autopost", action="store_true")
@@ -1274,6 +1287,8 @@ def main():
                 break
             log(f"sleeping {args.loop} min…")
             time.sleep(args.loop * 60)
+    elif args.cmd == "hot":
+        cmd_hot(cfg, args)
     elif args.cmd == "cancel":
         cmd_cancel(cfg, con, args.name)
     elif args.cmd == "ytvod":
