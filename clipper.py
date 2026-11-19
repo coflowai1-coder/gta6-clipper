@@ -657,6 +657,9 @@ def cmd_post_buffer(cfg, con):
                 yield t, hm
 
     slots = sorted(free_slots())
+    if os.getenv("POST_NOW", "").lower() in ("1", "true"):  # test mode: post in ~10 min, all platforms
+        slots = [(now + dt.timedelta(minutes=10 + 15 * i), "now") for i in range(len(rows))]
+        ig_slots = set()
     wd = ROOT / cfg["work_dir"]
     for r in rows:
         if not Path(r["video"]).exists():

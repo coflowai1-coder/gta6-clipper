@@ -4,7 +4,12 @@ on:
   schedule:
     # every hour, 24/7 (posts still only go out 9 AM – 3 AM Toronto)
     - cron: "7 * * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      post_now:
+        description: "Test: post clips ~10 min from now"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -22,6 +27,7 @@ jobs:
       WHISPER_MODEL: base
       CAPTION_FONT: Montserrat
       AUTO_POST: "1"
+      POST_NOW: ${{ inputs.post_now }}
       TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
       TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
       BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
@@ -53,7 +59,7 @@ jobs:
         run: pip install -q -r requirements.txt
 
       - name: Find, edit and schedule clips
-        run: python clipper.py run --max 2 --hours 6 --autopost
+        run: python clipper.py run --max ${{ inputs.post_now && 3 || 2 }} --hours 6 --autopost
 
       - name: Save progress
         if: always()
