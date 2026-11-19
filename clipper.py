@@ -714,7 +714,12 @@ def cmd_ytvod(cfg, con, args):
     """Clip the most-replayed moments of a YouTube video/VOD and queue them for posting."""
     import hashlib
     url = args.url
-    info = json.loads(subprocess.run(["yt-dlp", "-J", "--no-warnings", url], capture_output=True, text=True, check=True).stdout)
+    r = subprocess.run(["yt-dlp", "-J", "--no-warnings", url], capture_output=True, text=True)
+    if r.returncode != 0:
+        log(f"❌ YouTube refused: {r.stderr.strip()[-400:]}")
+        alert("YouTube clip failed", "YouTube blocked the cloud server from downloading that video. Claude needs another way in.", key="yt")
+        sys.exit(1)
+    info = json.loads(r.stdout)
     title, channel = info.get("title", ""), info.get("channel") or info.get("uploader") or "Streamer"
     dur = float(info.get("duration") or 0)
     log(f"YouTube: '{title}' by {channel} ({dur/3600:.1f} h)")
