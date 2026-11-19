@@ -461,7 +461,23 @@ def _detect_cam(src: Path, start: float, length: float):
 def render(src: Path, out: Path, ass: Path, layout: dict, start: float, length: float) -> None:
     ass_f = ass.name  # ffmpeg runs inside the subtitle's folder, so a plain filename is enough
     mode = layout.get("mode", "blur")
-    if mode == "full":
+    if mode == "bubble":
+        cam = layout.get("_cam")
+        game = "[g]crop=ih*9/16:ih,scale=1080:1920,setsar=1[game]"
+        if cam:
+            x, y, w, h = cam
+            bw, bh = layout.get("bubble_w", 460), int(layout.get("bubble_w", 460) * 0.8)
+            fc = (
+                f"[0:v]split=2[g][c];{game};"
+                f"[c]crop=iw*{w:.4f}:ih*{h:.4f}:iw*{x:.4f}:ih*{y:.4f},"
+                f"scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
+                "pad=iw+12:ih+12:6:6:white[cam];"
+                f"[game][cam]overlay=40:{layout.get('bubble_y', 170)},"
+                f"ass=filename={ass_f}[v]"
+            )
+        else:
+            fc = f"[0:v]null[g];{game};[game]ass=filename={ass_f}[v]"
+    elif mode == "full":
         cam = layout.get("_cam")
         if cam:
             x, y, w, h = cam
@@ -539,7 +555,11 @@ def process_clip(cfg, con, clip: dict, streamer_cfg: dict) -> None:
         length = min(total - start, target)
 
         layout = {**cfg.get("layout", {}), **streamer_cfg.get("layout", {})}
-        if layout.get("mode") == "full":
+        if layout.get("mode") == "bubble":
+            layout["_cam"] = detect_cam(raw, start, length)
+            cfg["style"]["caption_y"] = 0.70
+            log(f"   layout: full-screen gameplay{' + face box' if layout['_cam'] else ''}")
+        elif layout.get("mode") == "full":
             layout["_cam"] = detect_cam(raw, start, length)
             # captions sit below the stream when there's a webcam zoom, otherwise under the centred stream
             cfg["style"]["caption_y"] = 0.86 if layout["_cam"] else 0.78
