@@ -108,7 +108,7 @@ jobs:
             ffmpeg -v error -y -i "$f" -vf "fps=1/6,scale=270:-2,tile=4x1" -frames:v 1 "preview/$n.jpg"
           done
           git config user.name "clipper-bot"; git config user.email "clipper-bot@users.noreply.github.com"
-          git add preview && git commit -qm "preview stills" && git pull -q --rebase && git push -q || true
+          git checkout -q -B previews && git add preview && git commit -qm "preview stills" && git push -q -f origin previews || true
 
       - uses: actions/upload-artifact@v4
         if: ${{ inputs.preview }}
