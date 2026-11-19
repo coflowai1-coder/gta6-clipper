@@ -673,12 +673,14 @@ def cmd_run_once(cfg, con):
                 if (not a.get("language") or c.get("language", "").startswith(a["language"]))
                 and c["broadcaster_name"].lower() not in block]
         allow = {b.lower() for b in a.get("only_streamers", [])}
+        viral_any = cfg["fetch"].get("viral_any_views", 50000)
         if allow:
-            pool = [c for c in pool if c["broadcaster_name"].lower() in allow]
+            pool = [c for c in pool if c["broadcaster_name"].lower() in allow or c["view_count"] >= viral_any]
         tot = {}
         for c in pool:
             tot[c["broadcaster_name"]] = tot.get(c["broadcaster_name"], 0) + c["view_count"]
         top = sorted(tot, key=lambda k: -tot[k])[: a.get("top_n", 5)]
+        top += [c["broadcaster_name"] for c in pool if c["view_count"] >= viral_any and c["broadcaster_name"] not in top]
         log("auto-picked streamers: " + ", ".join(f"{t} ({tot[t]:,} views)" for t in top))
         block = {b.lower() for b in a.get("block_streamers", [])}
         pool = [c for c in pool if c["broadcaster_name"] in top]
@@ -938,6 +940,13 @@ def cmd_audit(cfg, con):
             log(f"   ok: {name}")
 
 
+def m_login(r):
+    try:
+        return json.loads(r["meta"])["login"].lower()
+    except Exception:
+        return ""
+
+
 def cmd_cancel(cfg, con, name):
     """Delete queued Buffer posts whose video file name contains `name`."""
     orgs = buffer_q("query { account { organizations { id } } }")["account"]["organizations"]
@@ -1059,6 +1068,22 @@ def cmd_post_buffer(cfg, con):
             if per_day.get(pday(slot), 0) >= cap:
                 log(f"Daily cap of {cap} reached — skipping {r['streamer']}")
                 continue
+            # keep the day mostly big viral clips: smaller clips only as occasional filler
+            premium_v = cfg["fetch"].get("premium_views", 10000)
+            is_camp = m_login(r) in CAMPAIGNS
+            if r["views"] < premium_v and not is_camp:
+                filler_max = p.get("filler_daily", 4)
+                gap_min = p.get("filler_gap_minutes", 90)
+                fillers = [dt.datetime.fromisoformat(sa) for (sa, v) in con.execute(
+                    "SELECT scheduled_at, views FROM clips WHERE scheduled_at IS NOT NULL AND status='scheduled'")
+                    if v is not None and v < premium_v]
+                f_today = sum(1 for t in fillers if pday(t) == pday(slot))
+                recent = any(abs((slot - u).total_seconds()) < gap_min * 60 for u in used)
+                if f_today >= filler_max or recent:
+                    con.execute("UPDATE clips SET status='skipped', error='filler limit (saving room for viral clips)' WHERE id=?", (r["id"],))
+                    con.commit()
+                    log(f"⏭️  held back {r['streamer']} ({r['views']:,} views) — saving room for bigger clips")
+                    continue
             ok = []
             yt_limit = p.get("youtube_daily", 2)
             yt_today = sum(1 for (sa, pl) in con.execute(
