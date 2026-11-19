@@ -572,7 +572,7 @@ def process_clip(cfg, con, clip: dict, streamer_cfg: dict) -> None:
             log(f"🚫 skipped {streamer}: {bad}")
             return
         copy = write_copy(cfg, streamer, clip["title"], words)
-        credit = cfg["style"].get("credit_template", "{streamer} • twitch.tv/{login}").format(
+        credit = streamer_cfg.get("credit") or cfg["style"].get("credit_template", "{streamer} • twitch.tv/{login}").format(
             streamer=streamer, login=clip["broadcaster_name"].lower())
         ass = wd / "raw" / f"{cid}.ass"
         build_ass(words, copy["hook"] if cfg["style"].get("show_hook", True) else "", credit, length, cfg["style"], ass, start)
@@ -706,6 +706,57 @@ def cmd_run_once(cfg, con):
         con.commit()
         process_clip(cfg, con, c, streamers[c["_login"]])
 
+    if cfg["posting"].get("auto_post"):
+        cmd_post(cfg, con)
+
+
+def cmd_ytvod(cfg, con, args):
+    """Clip the most-replayed moments of a YouTube video/VOD and queue them for posting."""
+    import hashlib
+    url = args.url
+    info = json.loads(subprocess.run(["yt-dlp", "-J", "--no-warnings", url], capture_output=True, text=True, check=True).stdout)
+    title, channel = info.get("title", ""), info.get("channel") or info.get("uploader") or "Streamer"
+    dur = float(info.get("duration") or 0)
+    log(f"YouTube: '{title}' by {channel} ({dur/3600:.1f} h)")
+    heat = info.get("heatmap") or []
+    clip_len = cfg.get("max_seconds", 25) + 8
+    if heat:
+        peaks = sorted(heat, key=lambda h: -h["value"])
+        log(f"using YouTube 'most replayed' graph ({len(heat)} points)")
+    else:
+        log("no 'most replayed' data yet — sampling evenly across the video")
+        step = max(dur / (args.n + 1), clip_len)
+        peaks = [{"start_time": step * (i + 1), "end_time": step * (i + 1) + 1, "value": 1} for i in range(args.n)]
+    chosen = []
+    for h in peaks:
+        mid = (h["start_time"] + h["end_time"]) / 2
+        if mid < 60 or (dur and mid > dur - 30):
+            continue
+        if all(abs(mid - c) > 120 for c in chosen):
+            chosen.append(mid)
+        if len(chosen) >= args.n:
+            break
+    wd = ROOT / cfg["work_dir"]
+    scfg = {"display": channel, "credit": f"{channel} • YouTube"}
+    for mid in sorted(chosen):
+        a, b = max(0, mid - clip_len * 0.45), mid + clip_len * 0.55
+        cid = "yt_" + hashlib.md5(f"{url}{int(a)}".encode()).hexdigest()[:16]
+        if con.execute("SELECT 1 FROM clips WHERE id=? AND status!='error'", (cid,)).fetchone():
+            continue
+        raw = wd / "raw" / f"{cid}.mp4"
+        r = subprocess.run(["yt-dlp", "-q", "--no-warnings", "-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080]/b",
+                            "--download-sections", f"*{a:.0f}-{b:.0f}", "--force-keyframes-at-cuts",
+                            "--merge-output-format", "mp4", "-o", str(raw), url], capture_output=True, text=True)
+        if r.returncode != 0 or not raw.exists():
+            log(f"❌ download failed at {a/60:.0f} min: {r.stderr.strip()[-300:]}")
+            continue
+        clip = {"id": cid, "url": url, "title": f"{channel} GTA 6 moment", "broadcaster_name": channel,
+                "view_count": args.views, "created_at": dt.datetime.now(UTC).isoformat()}
+        con.execute("INSERT OR REPLACE INTO clips(id,streamer,title,url,views,created_at,status) VALUES(?,?,?,?,?,?,?)",
+                    (cid, channel, clip["title"], url, args.views, clip["created_at"], "new"))
+        con.commit()
+        log(f"✂️  clipping {channel} at {int(a//3600)}:{int(a%3600//60):02d}:{int(a%60):02d}")
+        process_clip(cfg, con, clip, scfg)
     if cfg["posting"].get("auto_post"):
         cmd_post(cfg, con)
 
@@ -1106,6 +1157,9 @@ def main():
     r.add_argument("--autopost", action="store_true", help="approve + schedule clips that pass the safety filter")
     r.add_argument("--preview", action="store_true", help="render clips only, never post")
     sub.add_parser("approve"); sub.add_parser("post"); sub.add_parser("stats"); sub.add_parser("audit")
+    y = sub.add_parser("ytvod"); y.add_argument("url"); y.add_argument("--n", type=int, default=4)
+    y.add_argument("--views", type=int, default=50000, help="priority (>=10k = fast lane)")
+    y.add_argument("--autopost", action="store_true")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -1128,6 +1182,10 @@ def main():
                 break
             log(f"sleeping {args.loop} min…")
             time.sleep(args.loop * 60)
+    elif args.cmd == "ytvod":
+        if args.autopost:
+            cfg["posting"]["auto_post"] = True
+        cmd_ytvod(cfg, con, args)
     elif args.cmd == "discover":
         cmd_discover(cfg, args)
     else:

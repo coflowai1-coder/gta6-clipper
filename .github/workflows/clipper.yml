@@ -14,6 +14,14 @@ on:
         description: "Send this message to Jacob's phone"
         type: string
         default: ""
+      yt_url:
+        description: "Clip a YouTube video/VOD (most-replayed moments) and post"
+        type: string
+        default: ""
+      yt_count:
+        description: "How many clips from the YouTube video"
+        type: string
+        default: "4"
       preview:
         description: "Render a few clips for review (no posting)"
         type: boolean
@@ -95,6 +103,12 @@ jobs:
         if: ${{ inputs.audit_only }}
         run: python clipper.py audit
 
+      - name: Clip YouTube video
+        if: ${{ inputs.yt_url != '' }}
+        env:
+          YT_URL: ${{ inputs.yt_url }}
+        run: python clipper.py ytvod "$YT_URL" --n ${{ inputs.yt_count }} --autopost
+
       - name: Preview render (no posting)
         if: ${{ inputs.preview }}
         run: python clipper.py run --any --max 4 --hours 12 --preview
@@ -117,7 +131,7 @@ jobs:
           path: work/review/*.mp4
 
       - name: Find, edit and schedule clips
-        if: ${{ !inputs.audit_only && !inputs.preview }}
+        if: ${{ !inputs.audit_only && !inputs.preview && inputs.yt_url == '' }}
         run: python clipper.py run --max ${{ inputs.post_now && 3 || 2 }} --hours ${{ inputs.post_now && 24 || 12 }} --autopost
 
       - name: Save progress
