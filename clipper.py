@@ -665,6 +665,7 @@ def cmd_post_buffer(cfg, con):
         if not Path(r["video"]).exists():
             con.execute("UPDATE clips SET status='error', error='video file missing' WHERE id=?", (r["id"],))
             con.commit()
+            log(f"skipped {r['streamer']}: video from an earlier run is gone (cloud runs start fresh)")
             continue
         m = json.loads(r["meta"])
         social = f"{m['caption']}\n\n🎥 {m['streamer']} (twitch.tv/{m['login']})\n{' '.join(m['hashtags'])}"
