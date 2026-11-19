@@ -66,6 +66,10 @@ def load_config() -> dict:
     if not cfg_path.exists():
         sys.exit("config.yaml not found. Copy config.example.yaml to config.yaml and fill it in.")
     cfg = yaml.safe_load(cfg_path.read_text())
+    for k in ("TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET", "BUFFER_API_KEY", "SUPABASE_URL", "SUPABASE_KEY",
+              "UPLOAD_POST_API_KEY", "UPLOAD_POST_USER", "ANTHROPIC_API_KEY"):
+        if k in os.environ:
+            os.environ[k] = os.environ[k].strip()
     cfg.setdefault("work_dir", "work")
     # cloud overrides (set in the GitHub workflow)
     if os.getenv("WHISPER_MODEL"):
@@ -639,15 +643,18 @@ def cmd_post_buffer(cfg, con):
         per_day[d] = per_day.get(d, 0) + 1
     total_sched = sum(per_day.values())
 
+    def allowed(h):  # end_h may go past midnight, e.g. [9, 27] = 9 AM – 3 AM
+        return start_h <= h < end_h if end_h <= 24 else (h >= start_h or h < end_h - 24)
+
     def fit(t):
         for _ in range(30):
             lt = t.astimezone()
-            if lt.hour < start_h:
-                t = lt.replace(hour=start_h, minute=0, second=0).astimezone(UTC)
+            if not allowed(lt.hour):
+                day = lt if lt.hour < start_h else lt + dt.timedelta(days=1)
+                t = day.replace(hour=start_h, minute=0, second=0, microsecond=0).astimezone(UTC)
                 continue
-            if lt.hour >= end_h or per_day.get(lt.date(), 0) >= cap:
-                nxt = (lt + dt.timedelta(days=1)).replace(hour=start_h, minute=0, second=0)
-                t = nxt.astimezone(UTC)
+            if per_day.get(lt.date(), 0) >= cap:
+                t = (lt + dt.timedelta(days=1)).replace(hour=start_h, minute=0, second=0, microsecond=0).astimezone(UTC)
                 continue
             return t
         return t
@@ -817,6 +824,8 @@ def main():
                 cmd_run_once(cfg, con)
             except Exception as e:
                 log(f"run error: {e}")
+                if not args.loop:
+                    sys.exit(1)
             if not args.loop:
                 break
             log(f"sleeping {args.loop} min…")

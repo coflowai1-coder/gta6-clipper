@@ -46,7 +46,7 @@ posting:
   platforms: [tiktok, instagram, youtube]
   spacing_minutes: 40       # gap between posts so you don't look like a spam bot
   daily_cap: 14             # launch week: up to 14/day. Lower to 10 after launch week
-  active_hours: [9, 24]     # only post 9 AM – midnight (better reach than 3 AM)
+  active_hours: [9, 27]     # post 9 AM – 3 AM Toronto (= 6 AM – midnight California)
   instagram_every: 2        # IG gets every 2nd clip (IG punishes volume hardest)
   hashtags: ["#gta6", "#gtavi", "#gta", "#twitch", "#fyp"]
 
