@@ -755,7 +755,11 @@ def cmd_run_once(cfg, con):
     backlog = con.execute("SELECT COUNT(*) n FROM clips WHERE status='approved'").fetchone()["n"]
     queued = con.execute("SELECT COUNT(*) n FROM clips WHERE status='scheduled' AND scheduled_at > ?",
                          (dt.datetime.now(UTC).isoformat(),)).fetchone()["n"]
-    if cfg["posting"].get("auto_post") and (backlog >= 10 or queued >= 9):
+    done_n, allowed = day_quota(cfg, con, dt.datetime.now(UTC) + dt.timedelta(minutes=10))
+    if cfg["posting"].get("auto_post") and done_n >= allowed:
+        picked = []
+        log(f"pacing: {done_n}/{cfg['posting'].get('daily_cap', 14)} posted today — next post allowed a bit later, not rendering yet")
+    elif cfg["posting"].get("auto_post") and (backlog >= 10 or queued >= 9):
         picked = []
         log(f"Buffer queue full ({queued} waiting) — not rendering more this round")
     elif cfg["posting"].get("auto_post"):
@@ -913,16 +917,22 @@ def pull_inbox(cfg, con) -> None:
         try:
             rec = requests.get(f"{url}/storage/v1/object/gta-clips/{n}", headers=h, timeout=60).json()
             vname = rec["video_name"]
+            row = con.execute("SELECT status FROM clips WHERE id=?", (rec["id"],)).fetchone()
+            if row and row["status"] in ("scheduled", "removed", "skipped", "rejected"):
+                done += [n, f"inbox_{vname}"]  # already posted (or dropped) — clean up
+                continue
+            out = wd / "approved" / vname
+            if row and row["status"] == "approved" and out.exists():
+                continue
             vr = requests.get(f"{url}/storage/v1/object/gta-clips/inbox_{vname}", headers=h, timeout=600)
             if vr.status_code >= 300:
                 continue
-            out = wd / "approved" / vname
             out.write_bytes(vr.content)
             con.execute("INSERT OR REPLACE INTO clips(id,streamer,title,url,views,created_at,status,video,meta) VALUES(?,?,?,?,?,?,?,?,?)",
                         (rec["id"], rec["streamer"], rec["title"], rec["url"], rec["views"], rec["created_at"], "approved", str(out), rec["meta"]))
             con.commit()
-            done += [n, f"inbox_{vname}"]
-            log(f"📥 imported YouTube clip from the Mac: {vname}")
+            if not row:
+                log(f"📥 imported YouTube clip from the Mac: {vname}")
         except Exception as e:
             log(f"inbox import failed for {n}: {e}")
     if done:
@@ -1177,6 +1187,24 @@ def cmd_cancel(cfg, con, name):
     log(f"🗑️  cancelled {n} queued post(s) matching {name}")
 
 
+def day_quota(cfg, con, t):
+    """(posts already scheduled in t's 6AM-6AM posting day, how many are allowed by time t).
+    The daily cap is paced across the whole day so we never burn it all by the afternoon."""
+    cap = cfg["posting"].get("daily_cap", 14)
+    lt = t.astimezone()
+    start = (lt - dt.timedelta(hours=6)).replace(hour=6, minute=0, second=0, microsecond=0)
+    if start > lt:
+        start -= dt.timedelta(days=1)
+    n = 0
+    for (sa,) in con.execute("SELECT scheduled_at FROM clips WHERE scheduled_at IS NOT NULL"):
+        x = dt.datetime.fromisoformat(sa).astimezone()
+        if start <= x < start + dt.timedelta(days=1):
+            n += 1
+    hours = (lt - start).total_seconds() / 3600
+    allowed = min(cap, int(cap * (hours + 2) / 24) + 1)
+    return n, allowed
+
+
 def cmd_post_buffer(cfg, con):
     if not os.getenv("BUFFER_API_KEY") or not os.getenv("SUPABASE_URL"):
         log("BUFFER_API_KEY / SUPABASE_URL missing in .env — skipping posting")
@@ -1267,7 +1295,6 @@ def cmd_post_buffer(cfg, con):
         capt = m["caption"] if m["streamer"].lower() in m["caption"].lower() else f"{m['streamer']}: {m['caption']}"
         social = f"{capt}\n\n🎥 {m['streamer']} (twitch.tv/{m['login']})\n{' '.join(tags)}"
         try:
-            video_url = sb_upload(Path(r["video"]))
             hm = None
             slot = fast_slot() if r["views"] >= fast_views else None
             if slot:
@@ -1278,9 +1305,10 @@ def cmd_post_buffer(cfg, con):
             else:
                 log("No free posting slot in the next few hours — waiting for the next peak window.")
                 break
-            if per_day.get(pday(slot), 0) >= cap:
-                log(f"Daily cap of {cap} reached — skipping {r['streamer']}")
-                continue
+            done_n, allowed = day_quota(cfg, con, slot)
+            if done_n >= allowed:
+                log(f"pacing: {done_n} posted this posting-day, {allowed} allowed by {slot.astimezone():%I:%M %p} — {r['streamer']} waits for the next run")
+                break
             # keep the day mostly big viral clips: smaller clips only as occasional filler
             premium_v = cfg["fetch"].get("premium_views", 10000)
             is_camp = m_login(r) in CAMPAIGNS
@@ -1297,6 +1325,7 @@ def cmd_post_buffer(cfg, con):
                     con.commit()
                     log(f"⏭️  held back {r['streamer']} ({r['views']:,} views) — saving room for bigger clips")
                     continue
+            video_url = sb_upload(Path(r["video"]))
             ok = []
             yt_limit = p.get("youtube_daily", 2)
             yt_today = sum(1 for (sa, pl) in con.execute(
