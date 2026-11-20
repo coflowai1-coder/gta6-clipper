@@ -517,6 +517,27 @@ def render(src: Path, out: Path, ass: Path, layout: dict, start: float, length: 
             )
         else:
             fc = f"[0:v]null[g];{game};[game]ass=filename={ass_f}[v]"
+    elif mode == "fullgame":
+        # whole 16:9 gameplay across the middle, streamer's webcam big above it, blurred fill behind
+        cam = layout.get("_cam")
+        bg = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:6,eq=brightness=-0.15"
+        if cam:
+            x, y, w, h = cam
+            fc = (
+                f"[0:v]split=3[a][b][c];[a]{bg}[bg];"
+                "[b]scale=1080:-2:flags=lanczos,unsharp=5:5:0.5:5:5:0.0[game];"
+                f"[c]crop=iw*{w:.4f}:ih*{h:.4f}:iw*{x:.4f}:ih*{y:.4f},"
+                "scale=700:560:force_original_aspect_ratio=decrease:flags=lanczos,pad=iw+12:ih+12:6:6:white[cam];"
+                "[bg][game]overlay=0:700[t];[t][cam]overlay=(W-w)/2:'max(60,690-h)',setsar=1,"
+                f"ass=filename={ass_f}[v]"
+            )
+        else:
+            fc = (
+                f"[0:v]split=2[a][b];[a]{bg}[bg];"
+                "[b]scale=1080:-2:flags=lanczos,unsharp=5:5:0.5:5:5:0.0[game];"
+                "[bg][game]overlay=0:(H-h)/2-80,setsar=1,"
+                f"ass=filename={ass_f}[v]"
+            )
     elif mode == "full":
         cam = layout.get("_cam")
         if cam:
@@ -599,6 +620,10 @@ def process_clip(cfg, con, clip: dict, streamer_cfg: dict) -> None:
             layout["_cam"] = detect_cam(raw, start, length)
             cfg["style"]["caption_y"] = 0.70
             log(f"   layout: full-screen gameplay{' + face box' if layout['_cam'] else ''}")
+        elif layout.get("mode") == "fullgame":
+            layout["_cam"] = detect_cam(raw, start, length)
+            cfg["style"]["caption_y"] = 0.77 if layout["_cam"] else 0.74
+            log(f"   layout: full gameplay{' + webcam above' if layout['_cam'] else ''}")
         elif layout.get("mode") == "full":
             layout["_cam"] = detect_cam(raw, start, length)
             # captions sit below the stream when there's a webcam zoom, otherwise under the centred stream
