@@ -953,6 +953,9 @@ def pull_inbox(cfg, con) -> None:
             if vr.status_code >= 300:
                 continue
             out.write_bytes(vr.content)
+            fix = ROOT / "inbox" / vname  # a re-rendered copy (e.g. new layout) committed to the repo wins
+            if fix.exists():
+                shutil.copy(fix, out)
             con.execute("INSERT OR REPLACE INTO clips(id,streamer,title,url,views,created_at,status,video,meta) VALUES(?,?,?,?,?,?,?,?,?)",
                         (rec["id"], rec["streamer"], rec["title"], rec["url"], rec["views"], rec["created_at"], "approved", str(out), rec["meta"]))
             con.commit()
