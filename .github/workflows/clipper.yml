@@ -168,7 +168,7 @@ jobs:
 
       - name: Find, edit and schedule clips
         if: ${{ !inputs.audit_only && !inputs.preview && inputs.yt_url == '' && inputs.caption_test_url == '' && !inputs.hot }}
-        run: python clipper.py run --max ${{ inputs.post_now && 3 || 2 }} --hours ${{ inputs.post_now && 24 || 12 }} --autopost
+        run: python clipper.py run --max ${{ inputs.post_now && 4 || 4 }} --hours ${{ inputs.post_now && 24 || 12 }} --autopost
 
       - name: Save progress
         if: ${{ always() && !inputs.preview }}

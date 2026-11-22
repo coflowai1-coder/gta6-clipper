@@ -780,11 +780,15 @@ def cmd_run_once(cfg, con):
     backlog = con.execute("SELECT COUNT(*) n FROM clips WHERE status='approved'").fetchone()["n"]
     queued = con.execute("SELECT COUNT(*) n FROM clips WHERE status='scheduled' AND scheduled_at > ?",
                          (dt.datetime.now(UTC).isoformat(),)).fetchone()["n"]
-    done_n, allowed = day_quota(cfg, con, dt.datetime.now(UTC) + dt.timedelta(minutes=10))
+    try:
+        n_lanes = max(1, sum(1 for c in buffer_channels() if c["service"] == "tiktok" and not c.get("isQueuePaused")))
+    except Exception:
+        n_lanes = 1
+    done_n, allowed = day_quota(cfg, con, dt.datetime.now(UTC) + dt.timedelta(minutes=10), lanes=n_lanes)
     if cfg["posting"].get("auto_post") and done_n >= allowed:
         picked = []
         log(f"pacing: {done_n}/{cfg['posting'].get('daily_cap', 14)} posted today — next post allowed a bit later, not rendering yet")
-    elif cfg["posting"].get("auto_post") and (backlog >= 10 or queued >= 9):
+    elif cfg["posting"].get("auto_post") and (backlog >= 10 * n_lanes or queued >= 9 * n_lanes):
         picked = []
         log(f"Buffer queue full ({queued} waiting) — not rendering more this round")
     elif cfg["posting"].get("auto_post"):
@@ -1215,22 +1219,46 @@ def cmd_cancel(cfg, con, name):
     log(f"🗑️  cancelled {n} queued post(s) matching {name}")
 
 
-def day_quota(cfg, con, t):
-    """(posts already scheduled in t's 6AM-6AM posting day, how many are allowed by time t).
-    The daily cap is paced across the whole day so we never burn it all by the afternoon."""
+def lane_of(platforms: str | None, first_lane: str | None) -> str | None:
+    """Which TikTok account a scheduled row went to. Old rows (before multi-account) = the first account."""
+    if not platforms:
+        return None
+    for part in platforms.split(","):
+        if part.startswith("tiktok:"):
+            return part.split(":", 1)[1]
+        if part == "tiktok":
+            return first_lane
+    return first_lane
+
+
+def lane_cap(cfg, con, lane, first_lane, now):
+    """New TikTok accounts warm up: 3/day on day one, +2 each day, up to the normal cap."""
     cap = cfg["posting"].get("daily_cap", 14)
+    first = None
+    for (sa, pl) in con.execute("SELECT scheduled_at, platforms FROM clips WHERE scheduled_at IS NOT NULL"):
+        if lane_of(pl, first_lane) == lane:
+            t = dt.datetime.fromisoformat(sa)
+            first = t if first is None or t < first else first
+    days = 0 if first is None else max(0, (now - first).days)
+    return min(cap, 3 + 2 * days)
+
+
+def day_quota(cfg, con, t, lane=None, first_lane=None, lanes=1, cap=None):
+    """(posts already scheduled in t's 6AM-6AM posting day, how many are allowed by time t).
+    The daily cap is per TikTok account and paced across the whole day."""
+    cap = cap or cfg["posting"].get("daily_cap", 14)
     lt = t.astimezone()
     start = (lt - dt.timedelta(hours=6)).replace(hour=6, minute=0, second=0, microsecond=0)
     if start > lt:
         start -= dt.timedelta(days=1)
     n = 0
-    for (sa,) in con.execute("SELECT scheduled_at FROM clips WHERE scheduled_at IS NOT NULL"):
+    for (sa, pl) in con.execute("SELECT scheduled_at, platforms FROM clips WHERE scheduled_at IS NOT NULL"):
         x = dt.datetime.fromisoformat(sa).astimezone()
-        if start <= x < start + dt.timedelta(days=1):
+        if start <= x < start + dt.timedelta(days=1) and (lane is None or lane_of(pl, first_lane) == lane):
             n += 1
     hours = (lt - start).total_seconds() / 3600
     allowed = min(cap, int(cap * (hours + 2) / 24) + 1)
-    return n, allowed
+    return n, allowed * (1 if lane else lanes)
 
 
 def cmd_post_buffer(cfg, con):
@@ -1254,14 +1282,27 @@ def cmd_post_buffer(cfg, con):
         log(f"cleanup skipped: {e}")
 
     now = dt.datetime.now(UTC)
+    # every connected TikTok account is its own "lane": each clip goes to ONE account (no duplicates),
+    # and each account has its own 20-min gap, daily cap and pacing
+    lanes = [c for c in chans if c["service"] == "tiktok"]
+    others = [c for c in chans if c["service"] != "tiktok"]
+    first_lane = lanes[0]["id"] if lanes else None
+    lane_name = {c["id"]: c["name"] for c in lanes}
     queued = con.execute("SELECT COUNT(*) n FROM clips WHERE status='scheduled' AND scheduled_at > ?", (now.isoformat(),)).fetchone()["n"]
-    room = max(0, 9 - queued)  # Buffer free = 10 queued per channel
+    room = max(0, 9 * max(1, len(lanes)) - queued)  # Buffer free = 10 queued per channel
     rows = con.execute("SELECT * FROM clips WHERE status='approved' ORDER BY views DESC").fetchall()[:room]
 
     # Peak-hour slot schedule (Toronto time), built from 2026 posting-time studies
-    used = [dt.datetime.fromisoformat(sa) for (sa,) in con.execute(
-        "SELECT scheduled_at FROM clips WHERE scheduled_at IS NOT NULL AND scheduled_at > ?",
-        ((now - dt.timedelta(hours=1)).isoformat(),))]
+    lane_used = {c["id"]: [] for c in lanes}
+    used = []
+    for (sa, pl) in con.execute(
+            "SELECT scheduled_at, platforms FROM clips WHERE scheduled_at IS NOT NULL AND scheduled_at > ?",
+            ((now - dt.timedelta(hours=1)).isoformat(),)):
+        t_ = dt.datetime.fromisoformat(sa)
+        used.append(t_)
+        ln = lane_of(pl, first_lane)
+        if ln in lane_used:
+            lane_used[ln].append(t_)
     ig_slots = set(p.get("instagram_slots", []))
 
     def free_slots():
@@ -1300,10 +1341,11 @@ def cmd_post_buffer(cfg, con):
         h = t.astimezone().hour
         return start_h <= h < end_h if end_h <= 24 else (h >= start_h or h < end_h - 24)
 
-    def fast_slot():
+    def fast_slot(busy=None, gap=20):
+        busy = used if busy is None else busy
         t = now + dt.timedelta(minutes=10)
         for _ in range(30):
-            if not any(abs((t - u).total_seconds()) < 20 * 60 for u in used):
+            if not any(abs((t - u).total_seconds()) < gap * 60 for u in busy):
                 return t if in_window(t) else None
             t += dt.timedelta(minutes=5)
         return None
@@ -1324,19 +1366,39 @@ def cmd_post_buffer(cfg, con):
         social = f"{capt}\n\n🎥 {m['streamer']} (twitch.tv/{m['login']})\n{' '.join(tags)}"
         try:
             hm = None
-            slot = fast_slot() if r["views"] >= fast_views else None
-            if slot:
+            lane = None
+            if lanes:
+                # pick the TikTok account with room that has posted the least today
+                best = None
+                for c in lanes:
+                    sl = fast_slot(lane_used[c["id"]], gap=p.get("account_gap_minutes", 60))
+                    if not sl:
+                        continue
+                    n_, a_ = day_quota(cfg, con, sl, lane=c["id"], first_lane=first_lane,
+                                       cap=lane_cap(cfg, con, c["id"], first_lane, now))
+                    if n_ >= a_:
+                        continue
+                    if best is None or (n_, sl) < (best[0], best[1]):
+                        best = (n_, sl, c["id"])
+                if not best:
+                    log(f"pacing: every TikTok account is at its limit for now — {r['streamer']} waits for the next run")
+                    break
+                _, slot, lane = best
                 hm = "fast"
-                slots = [x for x in slots if abs((x[0] - slot).total_seconds()) >= 20 * 60]
-            elif slots:
-                slot, hm = slots.pop(0)
             else:
-                log("No free posting slot in the next few hours — waiting for the next peak window.")
-                break
-            done_n, allowed = day_quota(cfg, con, slot)
-            if done_n >= allowed:
-                log(f"pacing: {done_n} posted this posting-day, {allowed} allowed by {slot.astimezone():%I:%M %p} — {r['streamer']} waits for the next run")
-                break
+                slot = fast_slot() if r["views"] >= fast_views else None
+                if slot:
+                    hm = "fast"
+                    slots = [x for x in slots if abs((x[0] - slot).total_seconds()) >= 20 * 60]
+                elif slots:
+                    slot, hm = slots.pop(0)
+                else:
+                    log("No free posting slot in the next few hours — waiting for the next peak window.")
+                    break
+                done_n, allowed = day_quota(cfg, con, slot)
+                if done_n >= allowed:
+                    log(f"pacing: {done_n} posted this posting-day, {allowed} allowed by {slot.astimezone():%I:%M %p} — {r['streamer']} waits for the next run")
+                    break
             # keep the day mostly big viral clips: smaller clips only as occasional filler
             premium_v = cfg["fetch"].get("premium_views", 10000)
             is_camp = m_login(r) in CAMPAIGNS
@@ -1365,7 +1427,8 @@ def cmd_post_buffer(cfg, con):
                 "SELECT scheduled_at FROM clips WHERE platforms LIKE '%instagram%'")]
             ig_today = sum(1 for t in ig_rows if pday(t) == pday(slot))
             ig_close = any(abs((slot - t).total_seconds()) < ig_gap * 3600 for t in ig_rows)
-            for c in chans:
+            targets = ([c for c in lanes if c["id"] == lane] if lane else []) + others
+            for c in targets:
                 if c["service"] == "instagram" and (ig_today >= ig_limit or ig_close):
                     continue  # warming Instagram back up slowly after the review
                 if c["service"] == "youtube" and yt_today >= yt_limit:
@@ -1389,9 +1452,10 @@ def cmd_post_buffer(cfg, con):
                     if "maximum number of posts" not in res["message"]:
                         alert(f"⚠️ {c['service'].title()} post rejected", f"Buffer refused a post to {c['service']}: {res['message'][:200]}. Claude will look at it on the next check-in.", key=c["service"])
                 else:
-                    ok.append(c["service"])
+                    ok.append(f"tiktok:{c['id']}" if c["service"] == "tiktok" else c["service"])
             if not ok:
                 raise RuntimeError("no channel accepted the post")
+            where = ", ".join(f"TikTok @{lane_name.get(x.split(':', 1)[1], '?')}" if x.startswith("tiktok:") else x for x in ok)
             newp = wd / "posted" / Path(r["video"]).name
             shutil.move(r["video"], newp)
             con.execute("UPDATE clips SET status='scheduled', video=?, scheduled_at=?, platforms=? WHERE id=?",
@@ -1400,11 +1464,11 @@ def cmd_post_buffer(cfg, con):
             topic = p.get("ntfy_topic")
             if topic:
                 if camp:
-                    msg = f"{m['streamer']} clip is LIVE on {', '.join(ok)}. Submit the links in Content Rewards now (30-min rule)!"
+                    msg = f"{m['streamer']} clip is LIVE on {where}. Submit the link in Content Rewards now (30-min rule)!"
                     hdr = {"Title": f"💰 Submit {camp} clip now", "Tags": "moneybag", "Priority": "high",
                            "Click": "https://contentrewards.com"}
                 else:
-                    msg = f"{m['streamer']} ({r['views']:,} Twitch views) just posted on {', '.join(ok)}: {m['caption'][:80]}"
+                    msg = f"{m['streamer']} ({r['views']:,} Twitch views) just posted on {where}: {m['caption'][:80]}"
                     hdr = {"Title": "✅ New clip posted", "Tags": "movie_camera", "Priority": "default"}
                 hdr["At"] = str(int(slot.timestamp()) + 60)
                 hdr["Title"] = hdr["Title"].encode("ascii", "ignore").decode().strip()
@@ -1412,9 +1476,11 @@ def cmd_post_buffer(cfg, con):
                     requests.post(f"https://ntfy.sh/{topic}", timeout=20, data=msg.encode(), headers=hdr)
                 except Exception as e:
                     log(f"   (alert not sent: {e})")
-            lane = "⚡ FAST LANE " if hm == "fast" else "📅 "
-            log(f"{lane}{m['streamer']} ({r['views']:,} views): '{m['caption']}' → {', '.join(ok)} at {slot.astimezone():%a %I:%M %p}")
+            lane_tag = "⚡ " if hm == "fast" else "📅 "
+            log(f"{lane_tag}{m['streamer']} ({r['views']:,} views): '{m['caption']}' → {where} at {slot.astimezone():%a %I:%M %p}")
             used.append(slot)
+            if lane:
+                lane_used[lane].append(slot)
             per_day[pday(slot)] = per_day.get(pday(slot), 0) + 1
         except Exception as e:
             log(f"❌ post failed for {r['id']}: {e}")

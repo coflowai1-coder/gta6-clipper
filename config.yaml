@@ -70,7 +70,8 @@ posting:
   instagram_hours: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
   filler_daily: 99          # no filler limit — always post the most-viewed clip available
   filler_gap_minutes: 0
-  daily_cap: 14             # max posts per day (TikTok allows ~15)
+  daily_cap: 14             # max posts per day PER TikTok account (TikTok allows ~15)
+  account_gap_minutes: 60   # min gap between posts on the same account (new accounts also warm up: 3/day, +2 per day)
   active_hours: [0, 24]     # any time of day
   hashtags: ["#gta6", "#gtavi", "#gta", "#twitch", "#fyp"]
 
